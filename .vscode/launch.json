@@ -1,0 +1,67 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Babybot: Server",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--import", "tsx"],
+      "program": "${workspaceFolder}/apps/server/src/index.ts",
+      "env": {
+        "BABYBOT_DATA_DIR": ".babybot",
+        "KIMI_CODE_SDK_PATH": "${workspaceFolder}/../Dev/kimi-code/packages/node-sdk/src/index.ts",
+        "KIMI_LOG_LEVEL": "debug"
+      },
+      "sourceMaps": true,
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Babybot: Web dev server",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "--yes",
+        "pnpm@10.33.0",
+        "--filter",
+        "@babybot/web",
+        "dev"
+      ],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Babybot: Web browser",
+      "type": "pwa-chrome",
+      "request": "launch",
+      "url": "http://127.0.0.1:5173",
+      "webRoot": "${workspaceFolder}/apps/web"
+    },
+    {
+      "name": "Kimi SDK: Current Test",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/../Dev/kimi-code",
+      "program": "${workspaceFolder}/../Dev/kimi-code/node_modules/vitest/vitest.mjs",
+      "args": ["run", "${file}", "--no-file-parallelism"],
+      "env": {
+        "KIMI_LOG_LEVEL": "debug"
+      },
+      "sourceMaps": true,
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Babybot: Full stack",
+      "configurations": [
+        "Babybot: Server",
+        "Babybot: Web dev server",
+        "Babybot: Web browser"
+      ],
+      "stopAll": true
+    }
+  ]
+}

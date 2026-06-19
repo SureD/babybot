@@ -1,0 +1,97 @@
+{
+  "folders": [
+    {
+      "name": "babybot",
+      "path": "."
+    },
+    {
+      "name": "kimi-code",
+      "path": "../Dev/kimi-code"
+    }
+  ],
+  "settings": {
+    "typescript.tsdk": "babybot/node_modules/typescript/lib"
+  },
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Babybot: Server with kimi-code source",
+        "type": "node",
+        "request": "launch",
+        "cwd": "${workspaceFolder:babybot}",
+        "runtimeExecutable": "node",
+        "runtimeArgs": ["--import", "tsx"],
+        "program": "${workspaceFolder:babybot}/apps/server/src/index.ts",
+        "env": {
+          "BABYBOT_DATA_DIR": ".babybot",
+          "KIMI_CODE_SDK_PATH": "${workspaceFolder:kimi-code}/packages/node-sdk/src/index.ts",
+          "KIMI_LOG_LEVEL": "debug"
+        },
+        "sourceMaps": true,
+        "skipFiles": ["<node_internals>/**"]
+      },
+      {
+        "name": "Babybot: Web dev server",
+        "type": "node",
+        "request": "launch",
+        "cwd": "${workspaceFolder:babybot}",
+        "runtimeExecutable": "npx",
+        "runtimeArgs": [
+          "--yes",
+          "pnpm@10.33.0",
+          "--filter",
+          "@babybot/web",
+          "dev"
+        ],
+        "console": "integratedTerminal"
+      },
+      {
+        "name": "Babybot: Web browser",
+        "type": "pwa-chrome",
+        "request": "launch",
+        "url": "http://127.0.0.1:5173",
+        "webRoot": "${workspaceFolder:babybot}/apps/web"
+      },
+      {
+        "name": "Kimi SDK: Current Test",
+        "type": "node",
+        "request": "launch",
+        "cwd": "${workspaceFolder:kimi-code}",
+        "program": "${workspaceFolder:kimi-code}/node_modules/vitest/vitest.mjs",
+        "args": ["run", "${file}", "--no-file-parallelism"],
+        "env": {
+          "KIMI_LOG_LEVEL": "debug"
+        },
+        "sourceMaps": true,
+        "skipFiles": ["<node_internals>/**"]
+      },
+      {
+        "name": "Kimi SDK: Prompt Demo",
+        "type": "node",
+        "request": "launch",
+        "cwd": "${workspaceFolder:kimi-code}",
+        "runtimeExecutable": "node",
+        "runtimeArgs": ["--import", "tsx"],
+        "program": "${workspaceFolder:kimi-code}/packages/node-sdk/examples/kimi-harness-prompt-demo.ts",
+        "env": {
+          "KIMI_CODE_SMOKE_VERSION": "0.1.0",
+          "KIMI_LOG_LEVEL": "debug"
+        },
+        "sourceMaps": true,
+        "skipFiles": ["<node_internals>/**"]
+      }
+    ],
+    "compounds": [
+      {
+        "name": "Babybot: Full stack with kimi-code source",
+        "configurations": [
+          "Babybot: Server with kimi-code source",
+          "Babybot: Web dev server",
+          "Babybot: Web browser"
+        ],
+        "stopAll": true
+      }
+    ]
+  }
+}

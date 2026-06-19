@@ -1,0 +1,14 @@
+{
+  "name": "@babybot/storage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@babybot/contracts": "workspace:*",
+    "@babybot/core": "workspace:*"
+  }
+}
+
