@@ -6,6 +6,8 @@ export type {
   AgentTraceEvent,
   AgentUsage,
   ConfigureModelInput,
+  DirectChatTestInput,
+  DirectChatTestResult,
   DiscoverModelsInput,
   ModelProvider,
   SetupModel,

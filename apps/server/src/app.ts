@@ -10,6 +10,7 @@ import {
   createProjectInputSchema,
   createTaskInputSchema,
   configureModelInputSchema,
+  directChatTestInputSchema,
   discoverModelsInputSchema,
   modelProviderSchema,
   type ApiError,
@@ -27,6 +28,7 @@ import {
 import { FileProjectWorkspace, SqliteStorage } from '@babybot/storage';
 
 import type { ServerConfig } from './config';
+import { ProjectEventHub } from './project-events';
 
 export interface CreateAppOptions {
   readonly config: ServerConfig;
@@ -42,11 +44,20 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   const workspaces = new FileProjectWorkspace(join(options.config.dataDir, 'projects'));
   const agentBackend = options.agentBackend ?? createAgentBackend(options.config);
   const projectService = new ProjectService(storage, workspaces);
+  const projectEvents = new ProjectEventHub();
   const taskOrchestrator = new TaskOrchestrator({
     projects: storage,
     tasks: storage,
     agentSessions: storage,
     traces: storage,
+    events: {
+      taskUpdated(task) {
+        projectEvents.publish(task.projectId, { type: 'task.updated', task });
+      },
+      traceAppended(projectId, trace) {
+        projectEvents.publish(projectId, { type: 'trace.appended', trace });
+      },
+    },
     workspaces,
     capabilities: new LocalCapabilityRuntime(),
     agentBackend,
@@ -122,6 +133,22 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     }
   });
 
+  app.post('/api/setup/test-chat', async (request, reply) => {
+    const parsed = directChatTestInputSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: parsed.error.issues[0]?.message ?? 'Invalid chat test input.',
+      });
+    }
+    try {
+      return await agentBackend.testChat(parsed.data);
+    } catch (error) {
+      return reply.code(502).send({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
   app.get('/api/projects', () => projectService.list());
 
   app.post<{ Reply: Awaited<ReturnType<ProjectService['create']>> | ApiError }>(
@@ -149,6 +176,37 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   app.get<{ Params: { projectId: string } }>(
     '/api/projects/:projectId/tasks',
     (request) => taskOrchestrator.list(request.params.projectId),
+  );
+
+  app.get<{ Params: { projectId: string } }>(
+    '/api/projects/:projectId/events',
+    async (request, reply) => {
+      if ((await projectService.get(request.params.projectId)) === undefined) {
+        return reply.code(404).send({ error: 'Project not found.' });
+      }
+
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache, no-transform',
+        connection: 'keep-alive',
+        'x-accel-buffering': 'no',
+      });
+      const unsubscribe = projectEvents.subscribe(
+        request.params.projectId,
+        (event) => {
+          reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        },
+      );
+      reply.raw.write('event: ready\ndata: {}\n\n');
+      const heartbeat = setInterval(() => {
+        reply.raw.write(': heartbeat\n\n');
+      }, 15_000);
+      request.raw.once('close', () => {
+        clearInterval(heartbeat);
+        unsubscribe();
+      });
+    },
   );
 
   app.get<{ Params: { taskId: string } }>('/api/tasks/:taskId', async (request, reply) => {

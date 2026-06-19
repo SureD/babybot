@@ -3,6 +3,8 @@ import type {
   AgentTraceEvent,
   AgentUsage,
   ConfigureModelInput,
+  DirectChatTestInput,
+  DirectChatTestResult,
   DiscoverModelsInput,
   ExecutionPreference,
   Project,
@@ -36,6 +38,11 @@ export interface TraceRepository {
     taskId: string,
     afterSequence?: number,
   ): Promise<readonly AgentTraceEvent[]>;
+}
+
+export interface TaskEventPublisher {
+  taskUpdated(task: Task): void;
+  traceAppended(projectId: string, trace: AgentTraceEvent): void;
 }
 
 export interface ProjectWorkspace {
@@ -91,6 +98,7 @@ export interface AgentBackend {
   getSetupStatus(): Promise<SetupStatus>;
   discoverModels(input: DiscoverModelsInput): Promise<readonly SetupModel[]>;
   configure(input: ConfigureModelInput): Promise<SetupStatus>;
+  testChat(input: DirectChatTestInput): Promise<DirectChatTestResult>;
   createSession(input: CreateAgentSessionInput): Promise<AgentSession>;
   resumeSession(input: ResumeAgentSessionInput): Promise<AgentSession>;
   close(): Promise<void>;
@@ -107,6 +115,7 @@ export interface RuntimeDependencies {
   readonly tasks: TaskRepository;
   readonly agentSessions: AgentSessionRepository;
   readonly traces: TraceRepository;
+  readonly events: TaskEventPublisher;
   readonly workspaces: ProjectWorkspace;
   readonly capabilities: CapabilityRuntime;
   readonly agentBackend: AgentBackend;

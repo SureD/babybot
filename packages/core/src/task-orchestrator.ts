@@ -67,6 +67,7 @@ export class TaskOrchestrator {
       updatedAt: now,
     };
     await this.dependencies.tasks.saveTask(task);
+    this.dependencies.events.taskUpdated(task);
     return task;
   }
 
@@ -123,7 +124,9 @@ export class TaskOrchestrator {
         session,
         task.input,
         task.id,
+        task.projectId,
         this.dependencies.traces,
+        this.dependencies.events,
       );
       return this.completeAgentTask(task, output, await session.getUsage());
     } catch (error) {
@@ -171,6 +174,7 @@ export class TaskOrchestrator {
       updatedAt: new Date().toISOString(),
     };
     await this.dependencies.tasks.saveTask(updated);
+    this.dependencies.events.taskUpdated(updated);
     return updated;
   }
 }
@@ -179,7 +183,9 @@ async function consumeAgentRun(
   session: AgentSession,
   prompt: string,
   taskId: string,
+  projectId: string,
   traces: TraceRepository,
+  events: RuntimeDependencies['events'],
 ): Promise<string> {
   const output: string[] = [];
   let failure: string | undefined;
@@ -187,13 +193,15 @@ async function consumeAgentRun(
 
   for await (const event of session.run({ prompt })) {
     sequence += 1;
-    await traces.appendTrace({
+    const trace = {
       taskId,
       sessionId: session.id,
       sequence,
       timestamp: new Date().toISOString(),
       event,
-    });
+    };
+    await traces.appendTrace(trace);
+    events.traceAppended(projectId, trace);
     if (event.type === 'message.delta') {
       output.push(event.text);
     } else if (event.type === 'run.failed') {

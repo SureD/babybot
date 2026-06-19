@@ -41,6 +41,11 @@ showing projects:
 2. Enter an API key and load the provider's current model list.
 3. Select a tool-capable model and save it as the kimi-code default.
 
+For OpenRouter, **Test OpenRouter directly** sends a fixed minimal chat
+completion to the selected model without starting kimi-code. Use its HTTP
+status, response model, error, and request ID to distinguish provider/account
+problems from agent runtime problems.
+
 OpenRouter setup enables **Free tool-capable models only** by default. Free
 models are identified from OpenRouter's `:free` model IDs or zero pricing
 metadata. Babybot recommends a coding-named model first, followed by models
@@ -104,7 +109,9 @@ Use these breakpoints to follow one request through the stack:
 
 The Web task card shows live status, model, context occupancy, total token and
 cache usage, tool calls, retries, compaction, subagents, warnings, and raw
-runtime events. The UI requests only trace events after the last known sequence.
+runtime events. A project-scoped SSE stream delivers live updates. On connection
+and reconnection, the UI requests only trace events after the last known
+task-local sequence to recover anything not delivered live.
 
 Babybot persists tasks and translated events in `.babybot/babybot.sqlite`.
 Inspect the latest tasks with `pnpm debug:task`, then inspect one execution with

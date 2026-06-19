@@ -52,6 +52,25 @@ export const configureModelInputSchema = z.object({
 });
 export type ConfigureModelInput = z.infer<typeof configureModelInputSchema>;
 
+export const directChatTestInputSchema = z.object({
+  provider: modelProviderSchema,
+  apiKey: z.string().trim().min(1).optional(),
+  model: z.string().trim().min(1),
+});
+export type DirectChatTestInput = z.infer<typeof directChatTestInputSchema>;
+
+export interface DirectChatTestResult {
+  readonly ok: boolean;
+  readonly provider: ModelProvider;
+  readonly statusCode: number;
+  readonly requestedModel: string;
+  readonly responseModel?: string;
+  readonly content?: string;
+  readonly error?: string;
+  readonly requestId?: string;
+  readonly latencyMs: number;
+}
+
 export const projectSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -213,6 +232,16 @@ export const taskSchema = z.object({
   updatedAt: z.string(),
 });
 export type Task = z.infer<typeof taskSchema>;
+
+export type ProjectStreamEvent =
+  | {
+      readonly type: 'task.updated';
+      readonly task: Task;
+    }
+  | {
+      readonly type: 'trace.appended';
+      readonly trace: AgentTraceEvent;
+    };
 
 export const createProjectInputSchema = z.object({
   name: z.string().trim().min(1).max(120),

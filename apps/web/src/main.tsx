@@ -10,10 +10,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import type {
   AgentTraceEvent,
   AgentUsage,
+  DirectChatTestResult,
   ExecutionPreference,
   HealthResponse,
   ModelProvider,
   Project,
+  ProjectStreamEvent,
   SetupModel,
   SetupStatus,
   Task,
@@ -38,8 +40,6 @@ function App() {
   const [error, setError] = useState<string>();
   const [showSetup, setShowSetup] = useState(false);
   const traceCursors = useRef<Record<string, number>>({});
-  const loadedTerminalTraces = useRef(new Set<string>());
-  const refreshing = useRef(false);
   const activeProjectId = useRef<string | undefined>(undefined);
 
   useEffect(() => {
@@ -60,7 +60,6 @@ function App() {
       setTasks([]);
       setTraces({});
       traceCursors.current = {};
-      loadedTerminalTraces.current.clear();
       activeProjectId.current = undefined;
       return;
     }
@@ -69,32 +68,25 @@ function App() {
     setTasks([]);
     setTraces({});
     traceCursors.current = {};
-    loadedTerminalTraces.current.clear();
-    void refreshProject(projectId);
-    const interval = window.setInterval(() => {
-      void refreshProject(projectId);
-    }, 1_000);
-    return () => window.clearInterval(interval);
+    const unsubscribe = api.subscribeProject(projectId, {
+      onReady: () => void synchronizeProject(projectId),
+      onEvent: (event) => applyProjectEvent(projectId, event),
+    });
+    void synchronizeProject(projectId);
+    return unsubscribe;
   }, [selectedProject]);
 
-  async function refreshProject(projectId: string) {
-    if (refreshing.current) return;
-    refreshing.current = true;
+  async function synchronizeProject(projectId: string) {
+    const cursors = { ...traceCursors.current };
     try {
       const nextTasks = await api.listTasks(projectId);
       if (activeProjectId.current !== projectId) return;
-      setTasks(nextTasks);
+      setTasks((current) => mergeTasks(current, nextTasks));
       const traceEntries = await Promise.all(
         nextTasks
-          .filter(
-            (task) =>
-              task.preference !== 'capability' &&
-              (!loadedTerminalTraces.current.has(task.id) ||
-                task.status === 'pending' ||
-                task.status === 'running'),
-          )
+          .filter((task) => task.preference !== 'capability')
           .map(async (task) => {
-            const afterSequence = traceCursors.current[task.id] ?? 0;
+            const afterSequence = cursors[task.id] ?? 0;
             return [
               task.id,
               await api.getTrace(task.id, afterSequence),
@@ -102,26 +94,39 @@ function App() {
           }),
       );
       if (activeProjectId.current !== projectId) return;
-      setTraces((current) => {
-        const next = { ...current };
-        for (const [taskId, events] of traceEntries) {
-          if (events.length > 0) {
-            next[taskId] = [...(next[taskId] ?? []), ...events];
-            traceCursors.current[taskId] =
-              events.at(-1)?.sequence ?? traceCursors.current[taskId] ?? 0;
-          }
-          const task = nextTasks.find((candidate) => candidate.id === taskId);
-          if (task?.status === 'completed' || task?.status === 'failed') {
-            loadedTerminalTraces.current.add(taskId);
-          }
-        }
-        return next;
-      });
+      for (const [taskId, events] of traceEntries) {
+        mergeTraceEvents(taskId, events);
+      }
     } catch (caught) {
       showError(caught);
-    } finally {
-      refreshing.current = false;
     }
+  }
+
+  function applyProjectEvent(projectId: string, event: ProjectStreamEvent) {
+    if (activeProjectId.current !== projectId) return;
+    if (event.type === 'task.updated') {
+      setTasks((current) => upsertTask(current, event.task));
+    } else {
+      mergeTraceEvents(event.trace.taskId, [event.trace]);
+    }
+  }
+
+  function mergeTraceEvents(
+    taskId: string,
+    events: readonly AgentTraceEvent[],
+  ) {
+    if (events.length === 0) return;
+    setTraces((current) => {
+      const bySequence = new Map(
+        (current[taskId] ?? []).map((event) => [event.sequence, event]),
+      );
+      for (const event of events) bySequence.set(event.sequence, event);
+      const merged = [...bySequence.values()].sort(
+        (left, right) => left.sequence - right.sequence,
+      );
+      traceCursors.current[taskId] = merged.at(-1)?.sequence ?? 0;
+      return { ...current, [taskId]: merged };
+    });
   }
 
   async function createProject(event: FormEvent) {
@@ -151,10 +156,11 @@ function App() {
         input: taskInput,
         preference,
       });
-      setTasks((current) => [task, ...current]);
-      setTraces((current) => ({ ...current, [task.id]: [] }));
-      traceCursors.current[task.id] = 0;
-      loadedTerminalTraces.current.delete(task.id);
+      setTasks((current) => upsertTask(current, task));
+      setTraces((current) =>
+        current[task.id] === undefined ? { ...current, [task.id]: [] } : current,
+      );
+      traceCursors.current[task.id] ??= 0;
       setTaskInput('');
     } catch (caught) {
       showError(caught);
@@ -323,6 +329,39 @@ function App() {
   );
 }
 
+function mergeTasks(
+  current: readonly Task[],
+  incoming: readonly Task[],
+): readonly Task[] {
+  let merged = current;
+  for (const task of incoming) merged = upsertTask(merged, task);
+  return merged;
+}
+
+function upsertTask(current: readonly Task[], task: Task): readonly Task[] {
+  const existing = current.find((candidate) => candidate.id === task.id);
+  const nextTask =
+    existing !== undefined && compareTaskRevision(existing, task) >= 0
+      ? existing
+      : task;
+  return [
+    nextTask,
+    ...current.filter((candidate) => candidate.id !== task.id),
+  ].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+function compareTaskRevision(left: Task, right: Task): number {
+  const timestampComparison = left.updatedAt.localeCompare(right.updatedAt);
+  if (timestampComparison !== 0) return timestampComparison;
+  const statusOrder: Record<Task['status'], number> = {
+    pending: 0,
+    running: 1,
+    completed: 2,
+    failed: 2,
+  };
+  return statusOrder[left.status] - statusOrder[right.status];
+}
+
 function Setup({
   status,
   onConfigured,
@@ -343,6 +382,7 @@ function Setup({
   const [catalogUpdatedAt, setCatalogUpdatedAt] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [chatTest, setChatTest] = useState<DirectChatTestResult>();
 
   useEffect(() => {
     let active = true;
@@ -350,6 +390,7 @@ function Setup({
     setModel('');
     setCatalogUpdatedAt(undefined);
     setError(undefined);
+    setChatTest(undefined);
     void (async () => {
       try {
         const catalog = await api.modelCatalog(provider);
@@ -420,6 +461,26 @@ function Setup({
       });
       setApiKey('');
       onConfigured(nextStatus);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function testDirectChat() {
+    if (model === '') return;
+    setBusy(true);
+    setError(undefined);
+    setChatTest(undefined);
+    try {
+      setChatTest(
+        await api.testChat({
+          provider,
+          ...(apiKey.trim() === '' ? {} : { apiKey }),
+          model,
+        }),
+      );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -570,6 +631,41 @@ function Setup({
             >
               {busy ? 'Saving...' : 'Save and continue'}
             </button>
+            {provider === 'openrouter' ? (
+              <button
+                className="direct-chat-test"
+                type="button"
+                disabled={busy || model === ''}
+                onClick={() => void testDirectChat()}
+              >
+                {busy ? 'Testing...' : 'Test OpenRouter directly'}
+              </button>
+            ) : null}
+            {chatTest === undefined ? null : (
+              <div
+                className={chatTest.ok ? 'chat-test-result success' : 'chat-test-result failure'}
+              >
+                <strong>
+                  {chatTest.ok ? 'OpenRouter responded' : 'OpenRouter rejected the request'}
+                </strong>
+                <span>
+                  HTTP {chatTest.statusCode} · {chatTest.latencyMs} ms
+                </span>
+                <span>Requested model: {chatTest.requestedModel}</span>
+                {chatTest.responseModel === undefined ? null : (
+                  <span>Response model: {chatTest.responseModel}</span>
+                )}
+                {chatTest.content === undefined ? null : (
+                  <span>Response: {chatTest.content}</span>
+                )}
+                {chatTest.error === undefined ? null : (
+                  <span>Error: {chatTest.error}</span>
+                )}
+                {chatTest.requestId === undefined ? null : (
+                  <span>Request ID: {chatTest.requestId}</span>
+                )}
+              </div>
+            )}
           </div>
         )}
 

@@ -4,7 +4,10 @@ import type {
   CreateProjectInput,
   CreateTaskInput,
   DiscoverModelsInput,
+  DirectChatTestInput,
+  DirectChatTestResult,
   HealthResponse,
+  ProjectStreamEvent,
   Project,
   SetupModel,
   SetupModelCatalog,
@@ -24,6 +27,11 @@ export const api = {
     }),
   configureModel: (input: ConfigureModelInput): Promise<SetupStatus> =>
     request('/api/setup', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  testChat: (input: DirectChatTestInput): Promise<DirectChatTestResult> =>
+    request('/api/setup/test-chat', {
       method: 'POST',
       body: JSON.stringify(input),
     }),
@@ -50,6 +58,25 @@ export const api = {
     request(`/api/tasks/${encodeURIComponent(taskId)}/cancel`, {
       method: 'POST',
     }),
+  subscribeProject: (
+    projectId: string,
+    handlers: {
+      readonly onReady: () => void;
+      readonly onEvent: (event: ProjectStreamEvent) => void;
+    },
+  ): (() => void) => {
+    const source = new EventSource(
+      `/api/projects/${encodeURIComponent(projectId)}/events`,
+    );
+    source.addEventListener('ready', handlers.onReady);
+    for (const eventType of ['task.updated', 'trace.appended'] as const) {
+      source.addEventListener(eventType, (event) => {
+        if (!(event instanceof MessageEvent)) return;
+        handlers.onEvent(JSON.parse(event.data) as ProjectStreamEvent);
+      });
+    }
+    return () => source.close();
+  },
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

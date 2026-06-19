@@ -18,6 +18,8 @@ function createFixture() {
   };
   const tasks = new Map<string, Task>();
   const traces: AgentTraceEvent[] = [];
+  const publishedTraces: AgentTraceEvent[] = [];
+  const publishedTasks: Task[] = [];
   let sessionId: string | undefined;
   const runInputs: AgentRunInput[] = [];
   const resumedSessions: string[] = [];
@@ -85,6 +87,14 @@ function createFixture() {
         );
       },
     },
+    events: {
+      taskUpdated(task) {
+        publishedTasks.push(task);
+      },
+      traceAppended(_projectId, trace) {
+        publishedTraces.push(trace);
+      },
+    },
     workspaces: {
       async ensure() {
         return '/tmp/project-1';
@@ -126,6 +136,9 @@ function createFixture() {
       async configure() {
         throw new Error('Unexpected setup.');
       },
+      async testChat() {
+        throw new Error('Unexpected chat test.');
+      },
       async createSession() {
         return agentSession;
       },
@@ -142,6 +155,8 @@ function createFixture() {
     runInputs,
     resumedSessions,
     traces,
+    publishedTraces,
+    publishedTasks,
   };
 }
 
@@ -165,6 +180,12 @@ describe('TaskOrchestrator', () => {
       'run.started',
       'message.delta',
       'run.completed',
+    ]);
+    expect(fixture.publishedTraces).toEqual(fixture.traces);
+    expect(fixture.publishedTasks.map((published) => published.status)).toEqual([
+      'pending',
+      'running',
+      'completed',
     ]);
     await expect(fixture.orchestrator.trace(task.id, 1)).resolves.toEqual([
       expect.objectContaining({ sequence: 2 }),

@@ -47,6 +47,7 @@ Runs Babybot and connects the Web App to the product modules.
 It provides:
 
 - the local HTTP API;
+- a project-scoped Server-Sent Events stream for live task and trace updates;
 - first-run provider and model setup;
 - task state retrieval;
 - incremental trace retrieval;
@@ -111,6 +112,7 @@ This module manages:
 
 - DeepSeek and OpenRouter provider configuration through kimi-code;
 - API-key validation and tool-capable model discovery;
+- minimal direct provider chat diagnostics that bypass agent sessions;
 - OpenRouter free-model filtering and compatibility-based recommendation;
 - agent session creation and resumption;
 - project workspaces;
@@ -142,12 +144,17 @@ sequenceDiagram
     SDK-->>Adapter: Event stream
     Adapter-->>Core: Provider-neutral AgentEvent
     Core->>DB: Append event with sequence
-    UI->>API: Trace after last sequence
-    API->>DB: Read new events
-    API-->>UI: Incremental trace
+    Core-->>API: Publish persisted task and trace update
+    API-->>UI: Server-Sent Event
     Core->>SDK: Session.getStatus()
     Core->>DB: Save final usage and task result
 ```
+
+The Web App opens one project-scoped SSE connection instead of polling. Core
+publishes task changes and trace events only after they are persisted. On initial
+connection and reconnection, the Web App reads the current task list and trace
+events after its last task-local sequence, closing the race between durable state
+and live delivery. Task creation and cancellation remain regular HTTP requests.
 
 The Babybot trace is the product-facing diagnostic record. kimi-code
 `wire.jsonl` and session logs remain the lower-level runtime record. Both use
@@ -183,6 +190,13 @@ catalog without requiring the credential again. Refreshing the catalog still
 requires a matching credential, but both refresh and switching between cached
 models can reuse the provider key already stored by kimi-code.
 
+The setup API also exposes a minimal direct chat diagnostic. It reads the
+selected provider key through the backend boundary, then calls the provider's
+OpenAI-compatible `chat/completions` endpoint directly with a fixed short prompt
+and no agent session, system prompt, tools, or persisted conversation. The
+response reports the provider HTTP status, latency, model, content, and request
+ID when available without returning the API key.
+
 ### Storage Module
 
 Stores Babybot data locally.
@@ -212,8 +226,8 @@ It manages:
 
 The Local Server is the composition root. Core depends only on shared contracts
 and provider-neutral interfaces. Storage, capability runtime, and coding
-backends implement those interfaces. The Web App communicates only through the
-HTTP API.
+backends implement those interfaces. The Web App communicates through the HTTP
+API and its SSE event stream.
 
 ## Technology
 

@@ -210,6 +210,33 @@ body {
   background: #e8e2d7;
 }
 
+.direct-chat-test {
+  color: #315f4d;
+  background: #e8f1eb;
+}
+
+.chat-test-result {
+  display: grid;
+  gap: 5px;
+  border: 1px solid;
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.chat-test-result.success {
+  border-color: #a9c8b4;
+  color: #315f4d;
+  background: #eef6f0;
+}
+
+.chat-test-result.failure {
+  border-color: #d9b4aa;
+  color: #8a3d2f;
+  background: #fff1ed;
+}
+
 button,
 input,
 textarea,

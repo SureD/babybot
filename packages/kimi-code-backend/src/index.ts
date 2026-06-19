@@ -11,6 +11,8 @@ import type {
   AgentUsage,
   ConfigureModelInput,
   CreateAgentSessionInput,
+  DirectChatTestInput,
+  DirectChatTestResult,
   DiscoverModelsInput,
   ModelProvider,
   ResumeAgentSessionInput,
@@ -294,6 +296,62 @@ export class KimiCodeAgentBackend implements AgentBackend {
     };
   }
 
+  async testChat(input: DirectChatTestInput): Promise<DirectChatTestResult> {
+    const fetchImpl = this.options.fetchImpl ?? fetch;
+    const apiKey =
+      input.apiKey ??
+      findStoredApiKey(await (await this.getHarness()).getConfig(), input.provider);
+    if (apiKey === undefined) {
+      throw new Error(`Enter an API key before testing ${input.provider}.`);
+    }
+    const endpoint =
+      input.provider === 'deepseek'
+        ? 'https://api.deepseek.com/chat/completions'
+        : 'https://openrouter.ai/api/v1/chat/completions';
+    const startedAt = performance.now();
+    const response = await fetchImpl(endpoint, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: input.model,
+        messages: [{ role: 'user', content: 'Reply only with OK.' }],
+        max_tokens: 16,
+        temperature: 0,
+        stream: false,
+      }),
+    });
+    const latencyMs = Math.round(performance.now() - startedAt);
+    const payload = await readJsonResponse(response);
+    const requestId =
+      response.headers.get('x-request-id') ??
+      response.headers.get('openrouter-request-id') ??
+      undefined;
+    if (!response.ok) {
+      return {
+        ok: false,
+        provider: input.provider,
+        statusCode: response.status,
+        requestedModel: input.model,
+        error: readProviderError(payload, response.statusText),
+        ...(requestId === undefined ? {} : { requestId }),
+        latencyMs,
+      };
+    }
+    return {
+      ok: true,
+      provider: input.provider,
+      statusCode: response.status,
+      requestedModel: input.model,
+      ...readChatCompletion(payload),
+      ...(requestId === undefined ? {} : { requestId }),
+      latencyMs,
+    };
+  }
+
   async createSession(input: CreateAgentSessionInput): Promise<AgentSession> {
     const harness = await this.getHarness();
     const config = await harness.getConfig();
@@ -492,6 +550,10 @@ export class UnavailableAgentBackend implements AgentBackend {
     throw new Error('No agent backend is configured.');
   }
 
+  async testChat(_input: DirectChatTestInput): Promise<DirectChatTestResult> {
+    throw new Error('No agent backend is configured.');
+  }
+
   async createSession(_input: CreateAgentSessionInput): Promise<AgentSession> {
     throw new Error('No agent backend is configured.');
   }
@@ -576,6 +638,62 @@ async function requestJson(
     );
   }
   return response.json();
+}
+
+async function readJsonResponse(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (text.trim() === '') return undefined;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text.slice(0, 500);
+  }
+}
+
+function readProviderError(payload: unknown, fallback: string): string {
+  if (typeof payload === 'string') return payload;
+  if (typeof payload === 'object' && payload !== null && 'error' in payload) {
+    const error = payload.error;
+    if (typeof error === 'string') return error;
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'message' in error &&
+      typeof error.message === 'string'
+    ) {
+      return error.message;
+    }
+  }
+  return fallback === '' ? 'Provider returned an unknown error.' : fallback;
+}
+
+function readChatCompletion(
+  payload: unknown,
+): Partial<Pick<DirectChatTestResult, 'responseModel' | 'content'>> {
+  if (typeof payload !== 'object' || payload === null) return {};
+  const responseModel =
+    'model' in payload && typeof payload.model === 'string'
+      ? payload.model
+      : undefined;
+  const choices =
+    'choices' in payload && Array.isArray(payload.choices)
+      ? payload.choices
+      : [];
+  const first = choices[0];
+  const content =
+    typeof first === 'object' &&
+    first !== null &&
+    'message' in first &&
+    typeof first.message === 'object' &&
+    first.message !== null &&
+    'content' in first.message &&
+    typeof first.message.content === 'string'
+      ? first.message.content
+      : undefined;
+  return {
+    ...(responseModel === undefined ? {} : { responseModel }),
+    ...(content === undefined ? {} : { content }),
+  };
 }
 
 function parseProviderModels(

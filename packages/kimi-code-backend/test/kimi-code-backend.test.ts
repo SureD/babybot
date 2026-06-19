@@ -281,6 +281,94 @@ describe('KimiCodeAgentBackend', () => {
     }
   });
 
+  it('tests OpenRouter with a minimal direct chat completion request', async () => {
+    const fetchImpl = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        expect(init?.method).toBe('POST');
+        expect(init?.headers).toMatchObject({
+          Authorization: 'Bearer sk-or-v1-test',
+          'Content-Type': 'application/json',
+        });
+        if (typeof init?.body !== 'string') {
+          throw new Error('Expected a JSON request body.');
+        }
+        expect(JSON.parse(init.body)).toEqual({
+          model: 'qwen/coder:free',
+          messages: [{ role: 'user', content: 'Reply only with OK.' }],
+          max_tokens: 16,
+          temperature: 0,
+          stream: false,
+        });
+        return Response.json(
+          {
+            model: 'qwen/coder:free',
+            choices: [{ message: { content: 'OK' } }],
+          },
+          { headers: { 'x-request-id': 'openrouter-request-1' } },
+        );
+      },
+    ) as unknown as typeof fetch;
+    const backend = new KimiCodeAgentBackend({
+      sdkPath: fileURLToPath(new URL('./fixtures/fake-sdk.mjs', import.meta.url)),
+      permission: 'auto',
+      fetchImpl,
+    });
+
+    try {
+      await expect(
+        backend.testChat({
+          provider: 'openrouter',
+          apiKey: 'sk-or-v1-test',
+          model: 'qwen/coder:free',
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        provider: 'openrouter',
+        statusCode: 200,
+        requestedModel: 'qwen/coder:free',
+        responseModel: 'qwen/coder:free',
+        content: 'OK',
+        requestId: 'openrouter-request-1',
+      });
+      expect(fetchImpl).toHaveBeenCalledWith(
+        'https://openrouter.ai/api/v1/chat/completions',
+        expect.any(Object),
+      );
+    } finally {
+      await backend.close();
+    }
+  });
+
+  it('returns the OpenRouter HTTP error without hiding its status', async () => {
+    const fetchImpl = vi.fn(async () =>
+      Response.json(
+        { error: { message: 'Provider rate limited' } },
+        { status: 429 },
+      ),
+    ) as unknown as typeof fetch;
+    const backend = new KimiCodeAgentBackend({
+      sdkPath: fileURLToPath(new URL('./fixtures/fake-sdk.mjs', import.meta.url)),
+      permission: 'auto',
+      fetchImpl,
+    });
+
+    try {
+      await expect(
+        backend.testChat({
+          provider: 'openrouter',
+          apiKey: 'sk-or-v1-test',
+          model: 'qwen/coder:free',
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        statusCode: 429,
+        error: 'Provider rate limited',
+      });
+    } finally {
+      await backend.close();
+    }
+  });
+
   it('filters OpenRouter setup to free coding models and recommends coding first', async () => {
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url =
