@@ -69,6 +69,17 @@ describe('SqliteStorage', () => {
         arguments: { path: 'README.md' },
       },
     });
+    await storage.saveModelCatalog({
+      provider: 'openrouter',
+      models: [{
+        id: 'vendor/model:free',
+        name: 'Vendor Model',
+        contextTokens: 128_000,
+        supportsThinking: false,
+        isFree: true,
+      }],
+      updatedAt: project.createdAt,
+    });
 
     expect(await storage.listProjects()).toEqual([project]);
     expect(await storage.listTasks(project.id)).toEqual([task]);
@@ -88,8 +99,44 @@ describe('SqliteStorage', () => {
         },
       },
     ]);
+    expect(await storage.getModelCatalog('openrouter')).toEqual({
+      provider: 'openrouter',
+      models: [{
+        id: 'vendor/model:free',
+        name: 'Vendor Model',
+        contextTokens: 128_000,
+        supportsThinking: false,
+        isFree: true,
+      }],
+      updatedAt: project.createdAt,
+    });
     await storage.clearSessions('kimi-code');
     expect(await storage.getSession(project.id, 'kimi-code')).toBeUndefined();
     storage.close();
+  });
+
+  it('restores a saved model catalog after reopening the database', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'babybot-storage-'));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, 'babybot.sqlite');
+    const storage = new SqliteStorage(databasePath);
+    const catalog = {
+      provider: 'openrouter' as const,
+      models: [{
+        id: 'vendor/coder:free',
+        name: 'Vendor Coder',
+        contextTokens: 64_000,
+        supportsThinking: true,
+        isFree: true,
+      }],
+      updatedAt: '2026-06-19T08:00:00.000Z',
+    };
+
+    await storage.saveModelCatalog(catalog);
+    storage.close();
+
+    const reopened = new SqliteStorage(databasePath);
+    expect(await reopened.getModelCatalog('openrouter')).toEqual(catalog);
+    reopened.close();
   });
 });

@@ -177,6 +177,12 @@ It never returns the key. The key is stored in kimi-code's local configuration,
 not Babybot's SQLite database. Reconfiguration removes Babybot's saved
 kimi-code session references so later tasks start with the new model.
 
+Successful model discovery stores a redacted provider model catalog in SQLite,
+including free/paid and capability metadata. Reopening model settings reads this
+catalog without requiring the credential again. Refreshing the catalog still
+requires a matching credential, but both refresh and switching between cached
+models can reuse the provider key already stored by kimi-code.
+
 ### Storage Module
 
 Stores Babybot data locally.

@@ -377,4 +377,64 @@ describe('KimiCodeAgentBackend', () => {
       await backend.close();
     }
   });
+
+  it('reuses the saved provider key when switching configured models', async () => {
+    state.config = {
+      defaultModel: 'babybot-openrouter/vendor/old-model',
+      providers: {
+        'babybot-openrouter': {
+          type: 'openai',
+          baseUrl: 'https://openrouter.ai/api/v1',
+          apiKey: 'saved-openrouter-key',
+        },
+      },
+      models: {
+        'babybot-openrouter/vendor/old-model': {
+          provider: 'babybot-openrouter',
+          model: 'vendor/old-model',
+          maxContextSize: 32_000,
+        },
+      },
+    };
+    const fetchSpy = vi.fn(async (
+      _input: string | URL | Request,
+      _init?: RequestInit,
+    ) => {
+      return Response.json({
+        data: [{
+          id: 'vendor/new-model',
+          name: 'New Model',
+          context_length: 64_000,
+          supported_parameters: ['tools'],
+          pricing: { prompt: '0.001', completion: '0.002' },
+        }],
+      });
+    });
+    const fetchImpl = fetchSpy as unknown as typeof fetch;
+    const backend = new KimiCodeAgentBackend({
+      sdkPath: fileURLToPath(new URL('./fixtures/fake-sdk.mjs', import.meta.url)),
+      permission: 'auto',
+      fetchImpl,
+    });
+
+    try {
+      await expect(backend.configure({
+        provider: 'openrouter',
+        model: 'vendor/new-model',
+      })).resolves.toMatchObject({
+        provider: 'openrouter',
+        model: 'vendor/new-model',
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      for (const call of fetchSpy.mock.calls) {
+        expect(call[1]).toMatchObject({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer saved-openrouter-key',
+          }),
+        });
+      }
+    } finally {
+      await backend.close();
+    }
+  });
 });

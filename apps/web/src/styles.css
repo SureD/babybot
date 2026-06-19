@@ -25,7 +25,7 @@ body {
 }
 
 .setup-card {
-  width: min(100%, 520px);
+  width: min(100%, 720px);
   border: 1px solid #d9d1c4;
   border-radius: 16px;
   padding: 32px;
@@ -71,8 +71,122 @@ body {
   font-weight: 500 !important;
 }
 
-.free-model-filter input {
-  width: auto;
+.free-model-filter input,
+.model-option > input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  border: 0;
+  padding: 0;
+  accent-color: #376f5a;
+}
+
+.model-picker-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.model-picker-heading p {
+  margin: 4px 0 0;
+  color: #777066;
+  font-size: 12px;
+}
+
+.model-picker-heading .free-model-filter {
+  flex: none;
+  margin: 0;
+}
+
+.model-list {
+  display: grid;
+  gap: 8px;
+  max-height: min(430px, 48vh);
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.model-option {
+  display: flex;
+  gap: 12px;
+  margin: 0 !important;
+  border: 1px solid #ded7cb;
+  border-radius: 10px;
+  padding: 12px;
+  background: #fffdf8;
+  cursor: pointer;
+}
+
+.model-option:hover,
+.model-option.selected {
+  border-color: #789484;
+  background: #f2f7f3;
+}
+
+.model-option > input[type="radio"] {
+  margin: 3px 0 0;
+}
+
+.model-option-copy,
+.model-name,
+.model-meta {
+  display: flex;
+}
+
+.model-option-copy {
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.model-name {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.model-id {
+  overflow: hidden;
+  color: #777066;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.model-meta {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #69635a;
+  font-size: 11px;
+}
+
+.model-badge {
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.model-badge.free,
+.model-badge.recommended {
+  color: #315f4d;
+  background: #dcece1;
+}
+
+.model-badge.paid {
+  color: #755733;
+  background: #eee3d1;
+}
+
+.model-empty {
+  margin: 20px 0;
+  color: #777066;
+  text-align: center;
 }
 
 .setup-card input,
@@ -429,6 +543,20 @@ pre {
 }
 
 @media (max-width: 760px) {
+  .setup-shell {
+    padding: 16px;
+    place-items: start center;
+  }
+
+  .setup-card {
+    padding: 24px 20px;
+  }
+
+  .model-picker-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .shell {
     grid-template-columns: 1fr;
   }

@@ -7,6 +7,7 @@ import type {
   HealthResponse,
   Project,
   SetupModel,
+  SetupModelCatalog,
   SetupStatus,
   Task,
 } from '@babybot/contracts';
@@ -14,6 +15,8 @@ import type {
 export const api = {
   health: (): Promise<HealthResponse> => request('/api/health'),
   setupStatus: (): Promise<SetupStatus> => request('/api/setup'),
+  modelCatalog: (provider: DiscoverModelsInput['provider']): Promise<SetupModelCatalog> =>
+    request(`/api/setup/models?provider=${encodeURIComponent(provider)}`),
   discoverModels: (input: DiscoverModelsInput): Promise<readonly SetupModel[]> =>
     request('/api/setup/models', {
       method: 'POST',

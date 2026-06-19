@@ -31,14 +31,23 @@ export interface SetupModel {
   readonly recommended?: boolean;
 }
 
+export interface SetupModelCatalog {
+  readonly provider: ModelProvider;
+  readonly models: readonly SetupModel[];
+  readonly updatedAt?: string;
+}
+
 export const discoverModelsInputSchema = z.object({
   provider: modelProviderSchema,
-  apiKey: z.string().trim().min(1),
+  apiKey: z.string().trim().min(1).optional(),
   freeOnly: z.boolean().optional(),
 });
 export type DiscoverModelsInput = z.infer<typeof discoverModelsInputSchema>;
 
-export const configureModelInputSchema = discoverModelsInputSchema.extend({
+export const configureModelInputSchema = z.object({
+  provider: modelProviderSchema,
+  apiKey: z.string().trim().min(1).optional(),
+  freeOnly: z.boolean().optional(),
   model: z.string().trim().min(1),
 });
 export type ConfigureModelInput = z.infer<typeof configureModelInputSchema>;

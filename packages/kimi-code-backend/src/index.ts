@@ -202,18 +202,24 @@ export class KimiCodeAgentBackend implements AgentBackend {
     input: DiscoverModelsInput,
   ): Promise<readonly SetupModel[]> {
     const fetchImpl = this.options.fetchImpl ?? fetch;
+    const apiKey =
+      input.apiKey ??
+      findStoredApiKey(await (await this.getHarness()).getConfig(), input.provider);
+    if (apiKey === undefined) {
+      throw new Error(`Enter an API key before loading ${input.provider} models.`);
+    }
     if (input.provider === 'openrouter') {
       await requestJson(
         fetchImpl,
         'https://openrouter.ai/api/v1/auth/key',
-        input.apiKey,
+        apiKey,
       );
     }
     const endpoint =
       input.provider === 'deepseek'
         ? 'https://api.deepseek.com/models'
         : 'https://openrouter.ai/api/v1/models?supported_parameters=tools';
-    const payload = await requestJson(fetchImpl, endpoint, input.apiKey);
+    const payload = await requestJson(fetchImpl, endpoint, apiKey);
     const models = parseProviderModels(
       input.provider,
       payload,
@@ -231,7 +237,16 @@ export class KimiCodeAgentBackend implements AgentBackend {
         'KIMI_CODE_MODEL overrides the setup model. Remove it and restart Babybot.',
       );
     }
-    const model = (await this.discoverModels(input)).find(
+    const harness = await this.getHarness();
+    const config = await harness.getConfig();
+    const apiKey =
+      input.apiKey ?? findStoredApiKey(config, input.provider);
+    if (apiKey === undefined) {
+      throw new Error(
+        `Enter an API key before configuring ${input.provider}.`,
+      );
+    }
+    const model = (await this.discoverModels({ ...input, apiKey })).find(
       (candidate) => candidate.id === input.model,
     );
     if (model === undefined) {
@@ -240,7 +255,6 @@ export class KimiCodeAgentBackend implements AgentBackend {
 
     const providerId = `babybot-${input.provider}`;
     const modelAlias = `${providerId}/${model.id}`;
-    const harness = await this.getHarness();
     await harness.setConfig({
       providers: {
         [providerId]: {
@@ -249,7 +263,7 @@ export class KimiCodeAgentBackend implements AgentBackend {
             input.provider === 'deepseek'
               ? 'https://api.deepseek.com'
               : 'https://openrouter.ai/api/v1',
-          apiKey: input.apiKey,
+          apiKey,
         },
       },
       models: {
@@ -528,6 +542,18 @@ function detectProvider(baseUrl: string | undefined): ModelProvider | undefined 
   if (baseUrl?.includes('deepseek.com') === true) return 'deepseek';
   if (baseUrl?.includes('openrouter.ai') === true) return 'openrouter';
   return undefined;
+}
+
+function findStoredApiKey(
+  config: KimiConfig,
+  provider: ModelProvider,
+): string | undefined {
+  return Object.values(config.providers).find(
+    (candidate) =>
+      detectProvider(candidate.baseUrl) === provider &&
+      candidate.apiKey !== undefined &&
+      candidate.apiKey.trim() !== '',
+  )?.apiKey;
 }
 
 async function requestJson(

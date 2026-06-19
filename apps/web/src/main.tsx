@@ -336,25 +336,71 @@ function Setup({
     status.provider ?? 'deepseek',
   );
   const [apiKey, setApiKey] = useState('');
-  const [freeOnly, setFreeOnly] = useState(true);
+  const [freeOnly, setFreeOnly] = useState(false);
   const [models, setModels] = useState<readonly SetupModel[]>([]);
   const [model, setModel] = useState('');
+  const [modelQuery, setModelQuery] = useState('');
+  const [catalogUpdatedAt, setCatalogUpdatedAt] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
+  useEffect(() => {
+    let active = true;
+    setModels([]);
+    setModel('');
+    setCatalogUpdatedAt(undefined);
+    setError(undefined);
+    void (async () => {
+      try {
+        const catalog = await api.modelCatalog(provider);
+        const canUseSavedKey =
+          status.hasApiKey && status.provider === provider;
+        const nextModels =
+          catalog.models.length === 0 && canUseSavedKey
+            ? await api.discoverModels({ provider })
+            : catalog.models;
+        if (!active) return;
+        setModels(nextModels);
+        setCatalogUpdatedAt(
+          catalog.updatedAt ??
+            (nextModels.length === 0 ? undefined : new Date().toISOString()),
+        );
+        const currentModel =
+          status.provider === provider &&
+          nextModels.some((candidate) => candidate.id === status.model)
+            ? status.model
+            : nextModels.find((candidate) => candidate.recommended)?.id ??
+              nextModels[0]?.id;
+        setModel(currentModel ?? '');
+      } catch (caught) {
+        if (active) {
+          setError(caught instanceof Error ? caught.message : String(caught));
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [provider, status.model, status.provider]);
+
   async function loadModels(event: FormEvent) {
     event.preventDefault();
-    if (apiKey.trim() === '') return;
+    const canUseSavedKey = status.hasApiKey && status.provider === provider;
+    if (apiKey.trim() === '' && !canUseSavedKey) return;
     setBusy(true);
     setError(undefined);
     try {
       const nextModels = await api.discoverModels({
         provider,
-        apiKey,
-        ...(provider === 'openrouter' ? { freeOnly } : {}),
+        ...(apiKey.trim() === '' ? {} : { apiKey }),
       });
       setModels(nextModels);
-      setModel(nextModels[0]?.id ?? '');
+      setCatalogUpdatedAt(new Date().toISOString());
+      setModel((current) =>
+        nextModels.some((candidate) => candidate.id === current)
+          ? current
+          : nextModels[0]?.id ?? '',
+      );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -369,9 +415,8 @@ function Setup({
     try {
       const nextStatus = await api.configureModel({
         provider,
-        apiKey,
+        ...(apiKey.trim() === '' ? {} : { apiKey }),
         model,
-        ...(provider === 'openrouter' ? { freeOnly } : {}),
       });
       setApiKey('');
       onConfigured(nextStatus);
@@ -382,11 +427,23 @@ function Setup({
     }
   }
 
+  const visibleModels = models.filter((candidate) => {
+    if (freeOnly && !candidate.isFree) return false;
+    const query = modelQuery.trim().toLocaleLowerCase();
+    return (
+      query === '' ||
+      candidate.name.toLocaleLowerCase().includes(query) ||
+      candidate.id.toLocaleLowerCase().includes(query)
+    );
+  });
+
   return (
     <main className="setup-shell">
       <section className="setup-card">
-        <p className="eyebrow">First-time setup</p>
-        <h1>Connect a model</h1>
+        <p className="eyebrow">
+          {status.configured ? 'Model settings' : 'First-time setup'}
+        </p>
+        <h1>{status.configured ? 'Choose a model' : 'Connect a model'}</h1>
         <p className="setup-copy">
           Babybot uses kimi-code for model calls. Choose a provider, verify its
           API key, and select the default coding model.
@@ -410,67 +467,107 @@ function Setup({
               value={provider}
               onChange={(event) => {
                 setProvider(event.target.value as ModelProvider);
-                setFreeOnly(event.target.value === 'openrouter');
-                setModels([]);
-                setModel('');
+                setFreeOnly(false);
+                setModelQuery('');
               }}
             >
               <option value="deepseek">DeepSeek API</option>
               <option value="openrouter">OpenRouter API</option>
             </select>
 
-            <label htmlFor="setup-key">API key</label>
+            <label htmlFor="setup-key">
+              API key {status.hasApiKey && status.provider === provider ? '(saved)' : ''}
+            </label>
             <input
               id="setup-key"
               type="password"
               autoComplete="off"
               value={apiKey}
-              onChange={(event) => {
-                setApiKey(event.target.value);
-                setModels([]);
-                setModel('');
-              }}
+              onChange={(event) => setApiKey(event.target.value)}
               placeholder={provider === 'deepseek' ? 'sk-...' : 'sk-or-v1-...'}
             />
-
-            {provider === 'openrouter' ? (
-              <label className="free-model-filter">
-                <input
-                  type="checkbox"
-                  checked={freeOnly}
-                  onChange={(event) => {
-                    setFreeOnly(event.target.checked);
-                    setModels([]);
-                    setModel('');
-                  }}
-                />
-                Free tool-capable models only
-              </label>
-            ) : null}
-
-            <button disabled={busy || apiKey.trim() === ''}>
-              {busy && models.length === 0 ? 'Checking...' : 'Load models'}
+            <button
+              disabled={
+                busy ||
+                (apiKey.trim() === '' &&
+                  !(status.hasApiKey && status.provider === provider))
+              }
+            >
+              {busy ? 'Checking...' : models.length === 0 ? 'Load models' : 'Refresh models'}
             </button>
           </form>
         )}
 
         {models.length === 0 ? null : (
           <div className="model-picker">
-            <label htmlFor="setup-model">Default model</label>
-            <select
-              id="setup-model"
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-            >
-              {models.map((candidate) => (
-                <option key={candidate.id} value={candidate.id}>
-                  {candidate.recommended ? 'Recommended: ' : ''}
-                  {candidate.name} ({formatTokenLimit(candidate.contextTokens)}
-                  {candidate.isFree ? ', free' : ''})
-                </option>
+            <div className="model-picker-heading">
+              <div>
+                <label htmlFor="model-search">Available models</label>
+                <p>
+                  {models.length} saved locally
+                  {catalogUpdatedAt === undefined
+                    ? ''
+                    : ` · updated ${formatCatalogDate(catalogUpdatedAt)}`}
+                </p>
+              </div>
+              {provider === 'openrouter' ? (
+                <label className="free-model-filter">
+                  <input
+                    type="checkbox"
+                    checked={freeOnly}
+                    onChange={(event) => setFreeOnly(event.target.checked)}
+                  />
+                  Free only
+                </label>
+              ) : null}
+            </div>
+            <input
+              id="model-search"
+              type="search"
+              value={modelQuery}
+              onChange={(event) => setModelQuery(event.target.value)}
+              placeholder="Search model name or ID"
+            />
+            <div className="model-list" role="radiogroup" aria-label="Default model">
+              {visibleModels.map((candidate) => (
+                <label
+                  className={candidate.id === model ? 'model-option selected' : 'model-option'}
+                  key={candidate.id}
+                >
+                  <input
+                    type="radio"
+                    name="setup-model"
+                    value={candidate.id}
+                    checked={candidate.id === model}
+                    onChange={() => setModel(candidate.id)}
+                  />
+                  <span className="model-option-copy">
+                    <span className="model-name">
+                      {candidate.name}
+                      {candidate.recommended ? (
+                        <span className="model-badge recommended">Recommended</span>
+                      ) : null}
+                    </span>
+                    <span className="model-id">{candidate.id}</span>
+                    <span className="model-meta">
+                      <span className={candidate.isFree ? 'model-badge free' : 'model-badge paid'}>
+                        {candidate.isFree ? 'Free' : 'Paid'}
+                      </span>
+                      <span>{formatTokenLimit(candidate.contextTokens)}</span>
+                      {candidate.supportsThinking ? <span>Reasoning</span> : null}
+                    </span>
+                  </span>
+                </label>
               ))}
-            </select>
-            <button disabled={busy || model === ''} onClick={() => void saveSetup()}>
+              {visibleModels.length === 0 ? (
+                <p className="model-empty">No models match these filters.</p>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              disabled={busy || model === ''}
+              onClick={() => void saveSetup()}
+            >
               {busy ? 'Saving...' : 'Save and continue'}
             </button>
           </div>
@@ -492,9 +589,16 @@ function Setup({
 }
 
 function formatTokenLimit(tokens: number): string {
-  return tokens >= 1_000_000
-    ? `${tokens / 1_000_000}M context`
-    : `${Math.round(tokens / 1_000)}K context`;
+  if (tokens < 1_000_000) return `${Math.round(tokens / 1_000)}K context`;
+  const millions = tokens / 1_000_000;
+  return `${Number(millions.toFixed(1))}M context`;
+}
+
+function formatCatalogDate(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
 }
 
 function Usage({ usage }: { readonly usage: AgentUsage }) {

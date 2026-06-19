@@ -5,7 +5,10 @@ import { DatabaseSync } from 'node:sqlite';
 import type {
   AgentTraceEvent,
   AgentUsage,
+  ModelProvider,
   Project,
+  SetupModel,
+  SetupModelCatalog,
   Task,
   TokenUsage,
 } from '@babybot/contracts';
@@ -45,6 +48,12 @@ interface TraceRow {
   readonly sequence: number;
   readonly timestamp: string;
   readonly event: string;
+}
+
+interface ModelCatalogRow {
+  readonly provider: ModelProvider;
+  readonly models: string;
+  readonly updated_at: string;
 }
 
 export class SqliteStorage
@@ -154,6 +163,36 @@ export class SqliteStorage
       .run(backend);
   }
 
+  async getModelCatalog(
+    provider: ModelProvider,
+  ): Promise<SetupModelCatalog | undefined> {
+    const row = this.database
+      .prepare('SELECT * FROM model_catalogs WHERE provider = ?')
+      .get(provider) as ModelCatalogRow | undefined;
+    if (row === undefined) return undefined;
+    return {
+      provider: row.provider,
+      models: JSON.parse(row.models) as SetupModel[],
+      updatedAt: row.updated_at,
+    };
+  }
+
+  async saveModelCatalog(catalog: SetupModelCatalog): Promise<void> {
+    this.database
+      .prepare(
+        `INSERT INTO model_catalogs (provider, models, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(provider) DO UPDATE SET
+           models = excluded.models,
+           updated_at = excluded.updated_at`,
+      )
+      .run(
+        catalog.provider,
+        JSON.stringify(catalog.models),
+        catalog.updatedAt ?? new Date().toISOString(),
+      );
+  }
+
   close(): void {
     this.database.close();
   }
@@ -228,6 +267,12 @@ export class SqliteStorage
         timestamp TEXT NOT NULL,
         event TEXT NOT NULL,
         PRIMARY KEY (task_id, sequence)
+      );
+
+      CREATE TABLE IF NOT EXISTS model_catalogs (
+        provider TEXT PRIMARY KEY,
+        models TEXT NOT NULL,
+        updated_at TEXT NOT NULL
       );
 
       CREATE INDEX IF NOT EXISTS agent_trace_task_timestamp

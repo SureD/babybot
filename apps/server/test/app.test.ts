@@ -179,6 +179,18 @@ describe('Babybot HTTP API', () => {
         },
       ]);
 
+      const catalogResponse = await app.inject({
+        method: 'GET',
+        url: '/api/setup/models?provider=openrouter',
+      });
+      expect(catalogResponse.statusCode).toBe(200);
+      expect(catalogResponse.body).not.toContain('secret-key');
+      expect(catalogResponse.json()).toEqual({
+        provider: 'openrouter',
+        models: modelsResponse.json(),
+        updatedAt: expect.any(String),
+      });
+
       const setupResponse = await app.inject({
         method: 'POST',
         url: '/api/setup',
@@ -197,6 +209,16 @@ describe('Babybot HTTP API', () => {
         model: 'vendor/model',
         hasApiKey: true,
         modelLockedByEnvironment: false,
+      });
+
+
+      const emptyCatalogResponse = await app.inject({
+        method: 'GET',
+        url: '/api/setup/models?provider=deepseek',
+      });
+      expect(emptyCatalogResponse.json()).toEqual({
+        provider: 'deepseek',
+        models: [],
       });
     } finally {
       await app.close();

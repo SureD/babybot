@@ -11,6 +11,7 @@ import {
   createTaskInputSchema,
   configureModelInputSchema,
   discoverModelsInputSchema,
+  modelProviderSchema,
   type ApiError,
   type HealthResponse,
 } from '@babybot/contracts';
@@ -67,6 +68,20 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
   app.get('/api/setup', () => agentBackend.getSetupStatus());
 
+  app.get('/api/setup/models', async (request, reply) => {
+    const query = request.query as { readonly provider?: unknown };
+    const parsed = modelProviderSchema.safeParse(query.provider);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'A valid provider is required.' });
+    }
+    return (
+      (await storage.getModelCatalog(parsed.data)) ?? {
+        provider: parsed.data,
+        models: [],
+      }
+    );
+  });
+
   app.post('/api/setup/models', async (request, reply) => {
     const parsed = discoverModelsInputSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -75,7 +90,13 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
       });
     }
     try {
-      return await agentBackend.discoverModels(parsed.data);
+      const models = await agentBackend.discoverModels(parsed.data);
+      await storage.saveModelCatalog({
+        provider: parsed.data.provider,
+        models,
+        updatedAt: new Date().toISOString(),
+      });
+      return models;
     } catch (error) {
       return reply.code(400).send({
         error: error instanceof Error ? error.message : String(error),
