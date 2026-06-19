@@ -24,23 +24,29 @@ import type {
 import { api } from './api';
 import './styles.css';
 
+interface ProjectConversation {
+  readonly tasks: readonly Task[];
+  readonly traces: Readonly<Record<string, readonly AgentTraceEvent[]>>;
+}
+
 function App() {
   const [health, setHealth] = useState<HealthResponse>();
   const [setupStatus, setSetupStatus] = useState<SetupStatus>();
   const [projects, setProjects] = useState<readonly Project[]>([]);
-  const [selectedProject, setSelectedProject] = useState<Project>();
-  const [tasks, setTasks] = useState<readonly Task[]>([]);
-  const [traces, setTraces] = useState<
-    Readonly<Record<string, readonly AgentTraceEvent[]>>
+  const [selectedProjectId, setSelectedProjectId] = useState<string>();
+  const [conversations, setConversations] = useState<
+    Readonly<Record<string, ProjectConversation>>
   >({});
   const [projectName, setProjectName] = useState('');
-  const [taskInput, setTaskInput] = useState('');
+  const [taskInputs, setTaskInputs] = useState<Readonly<Record<string, string>>>({});
   const [preference, setPreference] = useState<ExecutionPreference>('auto');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [showSetup, setShowSetup] = useState(false);
   const traceCursors = useRef<Record<string, number>>({});
   const activeProjectId = useRef<string | undefined>(undefined);
+  const conversationRef = useRef<HTMLDivElement>(null);
+  const stickToBottom = useRef(true);
 
   useEffect(() => {
     void Promise.all([api.health(), api.setupStatus(), api.listProjects()])
@@ -49,39 +55,39 @@ function App() {
         setSetupStatus(nextSetupStatus);
         setProjects(nextProjects);
         if (nextSetupStatus.configured) {
-          setSelectedProject(nextProjects[0]);
+          setSelectedProjectId(nextProjects[0]?.id);
         }
       })
       .catch(showError);
   }, []);
 
   useEffect(() => {
-    if (selectedProject === undefined) {
-      setTasks([]);
-      setTraces({});
-      traceCursors.current = {};
+    if (selectedProjectId === undefined) {
       activeProjectId.current = undefined;
       return;
     }
-    const projectId = selectedProject.id;
+    const projectId = selectedProjectId;
     activeProjectId.current = projectId;
-    setTasks([]);
-    setTraces({});
-    traceCursors.current = {};
     const unsubscribe = api.subscribeProject(projectId, {
       onReady: () => void synchronizeProject(projectId),
       onEvent: (event) => applyProjectEvent(projectId, event),
     });
     void synchronizeProject(projectId);
     return unsubscribe;
-  }, [selectedProject]);
+  }, [selectedProjectId]);
 
   async function synchronizeProject(projectId: string) {
     const cursors = { ...traceCursors.current };
     try {
       const nextTasks = await api.listTasks(projectId);
       if (activeProjectId.current !== projectId) return;
-      setTasks((current) => mergeTasks(current, nextTasks));
+      setConversations((current) => ({
+        ...current,
+        [projectId]: {
+          tasks: mergeTasks(current[projectId]?.tasks ?? [], nextTasks),
+          traces: current[projectId]?.traces ?? {},
+        },
+      }));
       const traceEntries = await Promise.all(
         nextTasks
           .filter((task) => task.preference !== 'capability')
@@ -95,7 +101,7 @@ function App() {
       );
       if (activeProjectId.current !== projectId) return;
       for (const [taskId, events] of traceEntries) {
-        mergeTraceEvents(taskId, events);
+        mergeTraceEvents(projectId, taskId, events);
       }
     } catch (caught) {
       showError(caught);
@@ -105,27 +111,41 @@ function App() {
   function applyProjectEvent(projectId: string, event: ProjectStreamEvent) {
     if (activeProjectId.current !== projectId) return;
     if (event.type === 'task.updated') {
-      setTasks((current) => upsertTask(current, event.task));
+      setConversations((current) => ({
+        ...current,
+        [projectId]: {
+          tasks: upsertTask(current[projectId]?.tasks ?? [], event.task),
+          traces: current[projectId]?.traces ?? {},
+        },
+      }));
     } else {
-      mergeTraceEvents(event.trace.taskId, [event.trace]);
+      mergeTraceEvents(projectId, event.trace.taskId, [event.trace]);
     }
   }
 
   function mergeTraceEvents(
+    projectId: string,
     taskId: string,
     events: readonly AgentTraceEvent[],
   ) {
     if (events.length === 0) return;
-    setTraces((current) => {
+    setConversations((current) => {
+      const conversation = current[projectId] ?? { tasks: [], traces: {} };
       const bySequence = new Map(
-        (current[taskId] ?? []).map((event) => [event.sequence, event]),
+        (conversation.traces[taskId] ?? []).map((event) => [event.sequence, event]),
       );
       for (const event of events) bySequence.set(event.sequence, event);
       const merged = [...bySequence.values()].sort(
         (left, right) => left.sequence - right.sequence,
       );
       traceCursors.current[taskId] = merged.at(-1)?.sequence ?? 0;
-      return { ...current, [taskId]: merged };
+      return {
+        ...current,
+        [projectId]: {
+          ...conversation,
+          traces: { ...conversation.traces, [taskId]: merged },
+        },
+      };
     });
   }
 
@@ -137,7 +157,7 @@ function App() {
     try {
       const project = await api.createProject({ name: projectName });
       setProjects((current) => [project, ...current]);
-      setSelectedProject(project);
+      setSelectedProjectId(project.id);
       setProjectName('');
     } catch (caught) {
       showError(caught);
@@ -148,20 +168,29 @@ function App() {
 
   async function submitTask(event: FormEvent) {
     event.preventDefault();
-    if (selectedProject === undefined || taskInput.trim() === '') return;
+    if (selectedProjectId === undefined || taskInput.trim() === '') return;
     setBusy(true);
     setError(undefined);
     try {
-      const task = await api.createTask(selectedProject.id, {
+      const task = await api.createTask(selectedProjectId, {
         input: taskInput,
         preference,
       });
-      setTasks((current) => upsertTask(current, task));
-      setTraces((current) =>
-        current[task.id] === undefined ? { ...current, [task.id]: [] } : current,
-      );
+      setConversations((current) => {
+        const conversation = current[selectedProjectId] ?? { tasks: [], traces: {} };
+        return {
+          ...current,
+          [selectedProjectId]: {
+            tasks: upsertTask(conversation.tasks, task),
+            traces:
+              conversation.traces[task.id] === undefined
+                ? { ...conversation.traces, [task.id]: [] }
+                : conversation.traces,
+          },
+        };
+      });
       traceCursors.current[task.id] ??= 0;
-      setTaskInput('');
+      setTaskInputs((current) => ({ ...current, [selectedProjectId]: '' }));
     } catch (caught) {
       showError(caught);
     } finally {
@@ -181,6 +210,31 @@ function App() {
     setError(caught instanceof Error ? caught.message : String(caught));
   }
 
+  const selectedProject = projects.find(
+    (project) => project.id === selectedProjectId,
+  );
+  const conversation =
+    selectedProjectId === undefined ? undefined : conversations[selectedProjectId];
+  const tasks = conversation?.tasks ?? [];
+  const traces = conversation?.traces ?? {};
+  const taskInput =
+    selectedProjectId === undefined ? '' : taskInputs[selectedProjectId] ?? '';
+  const latestTraceSequence =
+    tasks[0] === undefined ? 0 : traces[tasks[0].id]?.at(-1)?.sequence ?? 0;
+
+  useEffect(() => {
+    stickToBottom.current = true;
+  }, [selectedProjectId]);
+
+  useEffect(() => {
+    if (!stickToBottom.current) return;
+    const frame = requestAnimationFrame(() => {
+      const element = conversationRef.current;
+      if (element !== null) element.scrollTop = element.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [latestTraceSequence, selectedProjectId, tasks.length]);
+
   if (setupStatus === undefined) {
     return (
       <main className="setup-shell">
@@ -199,7 +253,7 @@ function App() {
         onConfigured={(nextStatus) => {
           setSetupStatus(nextStatus);
           setShowSetup(false);
-          setSelectedProject(projects[0]);
+          setSelectedProjectId(projects[0]?.id);
         }}
       />
     );
@@ -226,17 +280,10 @@ function App() {
           </div>
         </form>
 
-        <nav aria-label="Projects">
-          {projects.map((project) => (
-            <button
-              className={selectedProject?.id === project.id ? 'project active' : 'project'}
-              key={project.id}
-              onClick={() => setSelectedProject(project)}
-            >
-              {project.name}
-            </button>
-          ))}
-        </nav>
+        <div className="project-summary">
+          <span>{projects.length}</span>
+          <p>Projects stay open as tabs in your workspace.</p>
+        </div>
 
         <footer>
           <div className="backend-status">
@@ -254,6 +301,22 @@ function App() {
       </aside>
 
       <section className="workspace">
+        <nav className="project-tabs" aria-label="Project tabs" role="tablist">
+          {projects.map((project) => (
+            <button
+              aria-selected={selectedProjectId === project.id}
+              className={selectedProjectId === project.id ? 'project-tab active' : 'project-tab'}
+              key={project.id}
+              onClick={() => setSelectedProjectId(project.id)}
+              role="tab"
+            >
+              <span>{project.name}</span>
+              {(conversations[project.id]?.tasks ?? []).some(
+                (task) => task.status === 'running' || task.status === 'pending',
+              ) ? <span className="tab-running">Running</span> : null}
+            </button>
+          ))}
+        </nav>
         {selectedProject === undefined ? (
           <div className="empty">
             <p>Create a project to start a persistent workspace.</p>
@@ -262,17 +325,96 @@ function App() {
           <>
             <header className="workspace-header">
               <div>
-                <p className="eyebrow">Project workspace</p>
+                <p className="eyebrow">Conversation</p>
                 <h2>{selectedProject.name}</h2>
               </div>
+              <p>
+                {tasks.length === 0
+                  ? 'No messages yet'
+                  : `${tasks.length} ${tasks.length === 1 ? 'turn' : 'turns'}`}
+              </p>
             </header>
+
+            {error === undefined ? null : <p className="error">{error}</p>}
+
+            <div
+              className="conversation"
+              aria-live="polite"
+              onScroll={(event) => {
+                const element = event.currentTarget;
+                stickToBottom.current =
+                  element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+              }}
+              ref={conversationRef}
+            >
+              {tasks.length === 0 ? (
+                <div className="conversation-empty">
+                  <h3>Start a conversation</h3>
+                  <p>
+                    Ask Babybot to research, write, plan, or work in this project.
+                    Agent activity will appear here as it happens.
+                  </p>
+                </div>
+              ) : null}
+              {[...tasks].reverse().map((task) => (
+                <article className="conversation-turn" key={task.id}>
+                  <section className="message user-message">
+                    <p className="message-author">You</p>
+                    <div className="message-body">{task.input}</div>
+                  </section>
+                  <section className="message agent-message">
+                    <div className="agent-heading">
+                      <p className="message-author">Babybot</p>
+                      <div className="task-meta">
+                        <span className={`status ${task.status}`}>{task.status}</span>
+                        <span>{task.route ?? task.preference}</span>
+                        {task.status === 'running' ? (
+                          <button
+                            className="cancel-task"
+                            onClick={() => void cancelTask(task.id)}
+                          >
+                            Stop
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                    <AgentActivity
+                      events={traces[task.id] ?? []}
+                      status={task.status}
+                    />
+                    {task.result === undefined ? null : (
+                      <div className="agent-response">{task.result}</div>
+                    )}
+                    {task.error === undefined ? null : (
+                      <p className="error agent-error">{task.error}</p>
+                    )}
+                    {task.usage === undefined ? null : <Usage usage={task.usage} />}
+                    {(traces[task.id]?.length ?? 0) === 0 ? null : (
+                      <TechnicalTrace events={traces[task.id] ?? []} />
+                    )}
+                  </section>
+                </article>
+              ))}
+            </div>
 
             <form className="task-form" onSubmit={(event) => void submitTask(event)}>
               <textarea
+                aria-label={`Message ${selectedProject.name}`}
                 value={taskInput}
-                onChange={(event) => setTaskInput(event.target.value)}
-                placeholder="Describe what Babybot should do..."
-                rows={5}
+                onChange={(event) =>
+                  setTaskInputs((current) => ({
+                    ...current,
+                    [selectedProject.id]: event.target.value,
+                  }))
+                }
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    event.currentTarget.form?.requestSubmit();
+                  }
+                }}
+                placeholder="Message Babybot..."
+                rows={3}
               />
               <div className="task-actions">
                 <select
@@ -282,46 +424,16 @@ function App() {
                     setPreference(event.target.value as ExecutionPreference)
                   }
                 >
-                  <option value="auto">Auto</option>
-                  <option value="capability">Existing capability</option>
-                  <option value="coding">Coding agent</option>
+                  <option value="auto">Auto route</option>
+                  <option value="capability">Use capability</option>
+                  <option value="coding">Use coding agent</option>
                 </select>
-                <button disabled={busy}>{busy ? 'Working...' : 'Run task'}</button>
+                <span className="composer-hint">Enter to send · Shift Enter for a new line</span>
+                <button disabled={busy || taskInput.trim() === ''}>
+                  {busy ? 'Sending...' : 'Send'}
+                </button>
               </div>
             </form>
-
-            {error === undefined ? null : <p className="error">{error}</p>}
-
-            <div className="task-list">
-              {tasks.map((task) => (
-                <article className="task" key={task.id}>
-                  <div className="task-meta">
-                    <span className={`status ${task.status}`}>{task.status}</span>
-                    <span>{task.route ?? task.preference}</span>
-                    {task.tokenUsage === undefined ? null : (
-                      <span>
-                        {task.tokenUsage.input + task.tokenUsage.output} tokens
-                      </span>
-                    )}
-                    {task.status === 'running' ? (
-                      <button
-                        className="cancel-task"
-                        onClick={() => void cancelTask(task.id)}
-                      >
-                        Cancel
-                      </button>
-                    ) : null}
-                  </div>
-                  <h3>{task.input}</h3>
-                  {task.usage === undefined ? null : <Usage usage={task.usage} />}
-                  {task.result === undefined ? null : <pre>{task.result}</pre>}
-                  {task.error === undefined ? null : <p className="error">{task.error}</p>}
-                  {(traces[task.id]?.length ?? 0) === 0 ? null : (
-                    <Trace events={traces[task.id] ?? []} />
-                  )}
-                </article>
-              ))}
-            </div>
           </>
         )}
       </section>
@@ -718,19 +830,175 @@ function Usage({ usage }: { readonly usage: AgentUsage }) {
   );
 }
 
-function Trace({ events }: { readonly events: readonly AgentTraceEvent[] }) {
-  const [open, setOpen] = useState(
-    () => events.at(-1)?.event.type !== 'run.completed',
+function AgentActivity({
+  events,
+  status,
+}: {
+  readonly events: readonly AgentTraceEvent[];
+  readonly status: Task['status'];
+}) {
+  const thinking = events
+    .flatMap((trace) =>
+      trace.event.type === 'thinking.delta' ? [trace.event.text] : [],
+    )
+    .join('')
+    .trim();
+  const tools = collectToolActivity(events);
+  const notices = events.filter((trace) =>
+    [
+      'step.retrying',
+      'warning',
+      'subagent.started',
+      'subagent.completed',
+      'subagent.failed',
+      'compaction.started',
+      'compaction.completed',
+    ].includes(trace.event.type),
   );
+
+  if (events.length === 0 && status !== 'running' && status !== 'pending') {
+    return null;
+  }
+
   return (
-    <details
-      className="trace"
-      open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-    >
-      <summary>Execution trace ({events.length})</summary>
+    <div className="agent-activity">
+      <div className="activity-heading">
+        <span>Agent activity</span>
+        <span>{activitySummary(events, status)}</span>
+      </div>
+      {thinking === '' ? null : (
+        <details className="thinking" open={status === 'running'}>
+          <summary>Reasoning</summary>
+          <p>{truncateStart(thinking, 1_200)}</p>
+        </details>
+      )}
+      {tools.length === 0 ? null : (
+        <div className="tool-activity">
+          {tools.map((tool) => (
+            <div className={`tool-row ${tool.state}`} key={tool.id}>
+              <div>
+                <strong>{tool.name}</strong>
+                <span>{tool.description ?? tool.detail}</span>
+              </div>
+              <span className="tool-state">{tool.state}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {notices.slice(-12).map((trace) => (
+        <div className={`activity-notice notice-${trace.event.type}`} key={trace.sequence}>
+          <strong>{activityLabel(trace)}</strong>
+          <span>{describeTrace(trace)}</span>
+        </div>
+      ))}
+      {events.length === 0 ? (
+        <div className="activity-pending">Waiting for the agent to start…</div>
+      ) : null}
+    </div>
+  );
+}
+
+interface ToolActivity {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly detail: string;
+  readonly state: 'running' | 'completed' | 'failed';
+}
+
+function collectToolActivity(events: readonly AgentTraceEvent[]): readonly ToolActivity[] {
+  const tools = new Map<string, ToolActivity>();
+  for (const trace of events) {
+    const event = trace.event;
+    if (event.type === 'tool.started') {
+      tools.set(event.toolCallId, {
+        id: event.toolCallId,
+        name: event.name,
+        ...(event.description === undefined ? {} : { description: event.description }),
+        detail: formatTraceValue(event.arguments),
+        state: 'running',
+      });
+    } else if (event.type === 'tool.progress') {
+      const current = tools.get(event.toolCallId);
+      if (current !== undefined) {
+        tools.set(event.toolCallId, {
+          ...current,
+          detail: event.text ?? `${event.kind}${event.percent === undefined ? '' : ` ${event.percent}%`}`,
+        });
+      }
+    } else if (event.type === 'tool.completed') {
+      const current = tools.get(event.toolCallId);
+      tools.set(event.toolCallId, {
+        id: event.toolCallId,
+        name: current?.name ?? event.name,
+        ...(current?.description === undefined ? {} : { description: current.description }),
+        detail: truncateEnd(formatTraceValue(event.output), 240),
+        state: event.isError ? 'failed' : 'completed',
+      });
+    }
+  }
+  return [...tools.values()];
+}
+
+function activitySummary(
+  events: readonly AgentTraceEvent[],
+  status: Task['status'],
+): string {
+  if (status === 'pending') return 'Queued';
+  if (status === 'completed') return 'Finished';
+  if (status === 'failed') return 'Stopped with an error';
+  const latest = [...events].reverse().find((trace) =>
+    !['message.delta', 'thinking.delta', 'agent.status', 'runtime.event'].includes(
+      trace.event.type,
+    ),
+  );
+  if (latest === undefined) return 'Starting';
+  if (latest.event.type === 'tool.started') return `Using ${latest.event.name}`;
+  if (latest.event.type === 'tool.progress') return latest.event.text ?? 'Using a tool';
+  if (latest.event.type === 'step.retrying') return 'Retrying';
+  return 'Working';
+}
+
+function activityLabel(trace: AgentTraceEvent): string {
+  switch (trace.event.type) {
+    case 'step.retrying':
+      return 'Retrying';
+    case 'warning':
+      return 'Warning';
+    case 'subagent.started':
+      return 'Sub-agent started';
+    case 'subagent.completed':
+      return 'Sub-agent finished';
+    case 'subagent.failed':
+      return 'Sub-agent failed';
+    case 'compaction.started':
+      return 'Optimizing context';
+    case 'compaction.completed':
+      return 'Context optimized';
+    default:
+      return 'Update';
+  }
+}
+
+function TechnicalTrace({ events }: { readonly events: readonly AgentTraceEvent[] }) {
+  const counts = new Map<string, number>();
+  for (const trace of events) {
+    counts.set(trace.event.type, (counts.get(trace.event.type) ?? 0) + 1);
+  }
+  const recentEvents = events.slice(-50);
+  return (
+    <details className="trace">
+      <summary>Technical trace · {events.length} events</summary>
+      <div className="trace-counts">
+        {[...counts.entries()].map(([type, count]) => (
+          <span key={type}>{type} {count}</span>
+        ))}
+      </div>
       <div className="trace-list">
-        {events.map((trace) => (
+        {events.length > recentEvents.length ? (
+          <p>Showing the latest {recentEvents.length} events.</p>
+        ) : null}
+        {recentEvents.map((trace) => (
           <div className={`trace-event trace-${trace.event.type}`} key={trace.sequence}>
             <time>{new Date(trace.timestamp).toLocaleTimeString()}</time>
             <strong>{trace.event.type}</strong>
@@ -807,6 +1075,14 @@ function formatTraceValue(value: unknown): string {
   if (value === undefined) return '';
   const text = typeof value === 'string' ? value : (JSON.stringify(value) ?? '');
   return text.length > 500 ? `${text.slice(0, 500)}...` : text;
+}
+
+function truncateStart(value: string, length: number): string {
+  return value.length > length ? `…${value.slice(-length)}` : value;
+}
+
+function truncateEnd(value: string, length: number): string {
+  return value.length > length ? `${value.slice(0, length)}…` : value;
 }
 
 declare global {

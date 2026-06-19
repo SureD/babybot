@@ -2,12 +2,18 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
 export type KimiPermission = 'auto' | 'manual' | 'yolo';
+export type AgentBackendName = 'pi' | 'kimi-code';
 
 export interface ServerConfig {
   readonly host: string;
   readonly port: number;
   readonly dataDir: string;
   readonly webDistDir: string;
+  readonly agentBackend?: AgentBackendName;
+  readonly pi?: {
+    readonly agentDir?: string;
+    readonly model?: string;
+  };
   readonly kimi: {
     readonly sdkPath?: string;
     readonly homeDir?: string;
@@ -30,6 +36,17 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Server
     port: parsePort(environment['BABYBOT_PORT']),
     dataDir,
     webDistDir: resolve(repositoryRoot, 'apps/web/dist'),
+    agentBackend: parseAgentBackend(environment['BABYBOT_AGENT_BACKEND']),
+    pi: {
+      agentDir: resolve(
+        repositoryRoot,
+        environment['BABYBOT_PI_HOME'] ?? joinRelative(dataDir, 'pi'),
+      ),
+      ...(environment['BABYBOT_PI_MODEL'] === undefined ||
+      environment['BABYBOT_PI_MODEL'].trim() === ''
+        ? {}
+        : { model: environment['BABYBOT_PI_MODEL'] }),
+    },
     kimi: {
       ...(environment['KIMI_CODE_SDK_PATH'] === undefined ||
       environment['KIMI_CODE_SDK_PATH'].trim() === ''
@@ -46,6 +63,16 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Server
       permission: rawPermission,
     },
   };
+}
+
+function joinRelative(parent: string, child: string): string {
+  return resolve(parent, child);
+}
+
+function parseAgentBackend(value: string | undefined): AgentBackendName {
+  if (value === undefined || value === '' || value === 'pi') return 'pi';
+  if (value === 'kimi-code') return value;
+  throw new Error('BABYBOT_AGENT_BACKEND must be pi or kimi-code.');
 }
 
 function parsePort(value: string | undefined): number {

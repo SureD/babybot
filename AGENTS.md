@@ -8,14 +8,32 @@ The repository is a pnpm workspace:
 - `apps/web` contains the React/Vite browser interface.
 - `packages/core` contains use cases and the provider-neutral agent protocol.
 - `packages/storage` owns SQLite persistence and project directories.
-- `packages/kimi-code-backend` is the only kimi-code SDK integration point.
+- `packages/pi-backend` embeds the Pi agent runtime and translates Pi events.
+- `packages/tool-runtime` owns the provider-neutral project tool registry.
+- `packages/kimi-code-backend` is a temporary rollback adapter during migration.
 - `packages/contracts` contains shared schemas and API types.
 - `packages/capability-runtime` contains the capability execution boundary.
 - `docs` contains product, architecture, and development documentation.
 
-Keep Babybot separate from the kimi-code repository. Babybot owns the Web app,
-local server, project and task state, orchestration, capability runtime, and
-storage. Access kimi-code only through the Agent Backend Module and its SDK.
+Babybot owns the Web app, local server, project and task state, orchestration,
+tool and capability runtimes, project workspaces, and storage. Pi owns the
+agent loop, model transport, session history, compaction, and built-in coding
+tool implementations. Keep Pi types inside `packages/pi-backend`.
+
+Each project has one persistent Pi session and a project-owned workspace. The
+default tools are `read`, `write`, `edit`, and `bash`. They are intentionally
+available without per-call approval inside the project runtime. A working
+directory is not a security boundary: do not describe the current trusted-local
+runtime as sandboxed, and route future isolation through a project runtime
+boundary instead of provider-specific checks.
+
+Tool sources are `builtin`, `native`, `generated`, and `mcp`. New tools must
+enter through the provider-neutral Tool Runtime rather than importing Pi into
+Core. Generated tools remain untrusted until validation is implemented. MCP,
+WebSearch, WebFetch, generated-tool loading, and ChatGPT OAuth are explicitly
+out of scope for the current Pi migration. Pi may load project `AGENTS.md`
+context, but automatic extension, skill, prompt-template, and theme discovery
+must remain disabled until Babybot owns their lifecycle and trust policy.
 
 Place tests under the owning module's `test/` directory. Avoid new cross-module
 dependencies without updating `docs/ARCHITECTURE.md`.
@@ -31,8 +49,9 @@ pnpm build
 pnpm check
 ```
 
-Use `pnpm kimi:build`, `pnpm kimi:typecheck`, and `pnpm kimi:test` for the
-adjacent kimi-code repository. See `docs/DEVELOPMENT.md` for debugging.
+Set `BABYBOT_AGENT_BACKEND=kimi-code` only when exercising the temporary
+rollback adapter. Its `pnpm kimi:*` commands remain available during migration.
+See `docs/DEVELOPMENT.md` for debugging.
 
 ## Coding Style & Naming Conventions
 
@@ -46,7 +65,8 @@ Run oxlint and TypeScript before submitting changes.
 Tests use Vitest and end in `.test.ts`. Cover business behavior in
 `packages/core`, persistence in `packages/storage`, and API integration in
 `apps/server`. Agent protocol changes require contract tests for event
-translation, session reuse, cancellation, and token accounting.
+translation, session reuse, cancellation, token accounting, and resolved
+project tools.
 
 ## Commit & Pull Request Guidelines
 

@@ -25,7 +25,9 @@ import {
   KimiCodeAgentBackend,
   UnavailableAgentBackend,
 } from '@babybot/kimi-code-backend';
+import { PiAgentBackend } from '@babybot/pi-backend';
 import { FileProjectWorkspace, SqliteStorage } from '@babybot/storage';
+import { ProjectToolRuntime } from '@babybot/tool-runtime';
 
 import type { ServerConfig } from './config';
 import { ProjectEventHub } from './project-events';
@@ -42,7 +44,9 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   const app = Fastify({ logger: options.logger ?? true });
   const storage = new SqliteStorage(join(options.config.dataDir, 'babybot.sqlite'));
   const workspaces = new FileProjectWorkspace(join(options.config.dataDir, 'projects'));
-  const agentBackend = options.agentBackend ?? createAgentBackend(options.config);
+  const toolRuntime = new ProjectToolRuntime();
+  const agentBackend =
+    options.agentBackend ?? createAgentBackend(options.config, toolRuntime);
   const projectService = new ProjectService(storage, workspaces);
   const projectEvents = new ProjectEventHub();
   const taskOrchestrator = new TaskOrchestrator({
@@ -276,7 +280,17 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   return app;
 }
 
-function createAgentBackend(config: ServerConfig): AgentBackend {
+function createAgentBackend(
+  config: ServerConfig,
+  toolRuntime: ProjectToolRuntime,
+): AgentBackend {
+  if ((config.agentBackend ?? 'pi') === 'pi') {
+    return new PiAgentBackend({
+      agentDir: config.pi?.agentDir ?? join(config.dataDir, 'pi'),
+      toolRuntime,
+      ...(config.pi?.model === undefined ? {} : { model: config.pi.model }),
+    });
+  }
   if (config.kimi.sdkPath === undefined) {
     return new UnavailableAgentBackend();
   }

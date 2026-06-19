@@ -1,0 +1,13 @@
+{
+  "name": "@babybot/pi-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@babybot/core": "workspace:*",
+    "@earendil-works/pi-coding-agent": "0.79.8"
+  }
+}

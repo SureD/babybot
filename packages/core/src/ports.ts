@@ -63,6 +63,23 @@ export interface CapabilityRuntime {
   run(match: CapabilityMatch, projectId: string, input: string): Promise<CapabilityResult>;
 }
 
+export type AgentToolSource = 'builtin' | 'native' | 'generated' | 'mcp';
+
+export interface AgentToolDescriptor {
+  readonly name: string;
+  readonly source: AgentToolSource;
+  readonly enabled: boolean;
+}
+
+export interface ResolveAgentToolsInput {
+  readonly projectId: string;
+  readonly workDir: string;
+}
+
+export interface AgentToolRuntime {
+  resolve(input: ResolveAgentToolsInput): Promise<readonly AgentToolDescriptor[]>;
+}
+
 export interface AgentBackendCapabilities {
   readonly streaming: boolean;
   readonly sessionResume: boolean;

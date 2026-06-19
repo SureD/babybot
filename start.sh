@@ -129,15 +129,18 @@ if [[ ! -d node_modules ]]; then
   "${PNPM[@]}" install
 fi
 
-KIMI_REPO="${KIMI_CODE_REPO:-../Dev/kimi-code}"
-if [[ ! -d "$KIMI_REPO" ]]; then
-  printf 'kimi-code was not found at %s. Set KIMI_CODE_REPO and run again.\n' "$KIMI_REPO" >&2
-  exit 1
-fi
+if grep --extended-regexp --quiet \
+  '^[[:space:]]*BABYBOT_AGENT_BACKEND=[[:space:]]*kimi-code[[:space:]]*$' .env; then
+  KIMI_REPO="${KIMI_CODE_REPO:-../Dev/kimi-code}"
+  if [[ ! -d "$KIMI_REPO" ]]; then
+    printf 'kimi-code was not found at %s. Set KIMI_CODE_REPO and run again.\n' "$KIMI_REPO" >&2
+    exit 1
+  fi
 
-if [[ ! -d "$KIMI_REPO/node_modules" ]]; then
-  printf 'Installing kimi-code dependencies...\n'
-  "${PNPM[@]}" kimi:install
+  if [[ ! -d "$KIMI_REPO/node_modules" ]]; then
+    printf 'Installing kimi-code dependencies...\n'
+    "${PNPM[@]}" kimi:install
+  fi
 fi
 
 (

@@ -93,9 +93,7 @@ export class TaskOrchestrator {
       }
 
       if (!(await this.dependencies.agentBackend.isAvailable())) {
-        throw new Error(
-          'No agent backend is configured. Set KIMI_CODE_SDK_PATH and restart Babybot.',
-        );
+        throw new Error('No agent backend is configured. Check the Babybot backend setup.');
       }
 
       const workDir = await this.dependencies.workspaces.ensure(task.projectId);

@@ -1,215 +1,144 @@
 # Babybot Software Architecture
 
-## Repository Boundary
+## Ownership
 
-Babybot and kimi-code are separate projects.
+Babybot is the product and control plane. It owns projects, workspaces, tasks,
+orchestration, tools, capabilities, execution traces, credentials, and storage.
+Pi is an embedded agent runtime dependency. It owns the model loop, provider
+transport, session history, compaction, and built-in coding tool
+implementations.
 
-- **Babybot** contains the product, project data, Web interface, and task
-  orchestration.
-- **kimi-code** provides the coding agent used by Babybot.
-- Babybot accesses kimi-code through an SDK dependency.
-- Babybot does not depend on the internal source structure of kimi-code.
+Provider and Pi types do not cross the Agent Backend boundary.
 
 ## Modules
 
 ```mermaid
 flowchart LR
     Web["Web App"] --> Server["Local Server"]
-    Server --> Projects["Project Module"]
-    Server --> Tasks["Task Module"]
-    Tasks --> Orchestrator["Orchestration Module"]
-    Orchestrator --> Runtime["Capability Runtime"]
-    Orchestrator --> Agent["Agent Backend Module"]
-    Agent --> Kimi["kimi-code SDK"]
-    Agent --> Trace["Execution Trace"]
-    Projects --> Storage["Storage Module"]
-    Tasks --> Storage
-    Runtime --> Storage
-    Trace --> Storage
+    Server --> Core["Project and Task Core"]
+    Core --> Capability["Capability Runtime"]
+    Core --> Agent["Agent Backend"]
+    Agent --> Pi["Pi Agent Runtime"]
+    Pi --> Provider["DeepSeek / OpenRouter"]
+    Pi --> Tools["Tool Runtime"]
+    Tools --> Builtins["read / write / edit / bash"]
+    Core --> Trace["Execution Trace"]
+    Core --> Storage["SQLite + Project Workspaces"]
 ```
 
-### Web App
+### Web App and Local Server
 
-Provides the user interface:
+The Web app provides project, task, setup, progress, result, usage, and
+technical-trace views. The Fastify server is the composition root and exposes
+HTTP plus one project-scoped Server-Sent Events stream.
 
-- project list;
-- project workspace;
-- conversation and task input;
-- progress and execution status;
-- an ordered execution trace and token usage;
-- documents, code, and other results; and
-- project-specific pages.
+### Project and Task Core
 
-### Local Server
+Core contains product behavior and provider-neutral ports. Each project owns a
+workspace and one persistent agent session reference. Tasks are turns executed
+against that long-lived project session.
 
-Runs Babybot and connects the Web App to the product modules.
+The orchestrator first checks reusable capabilities, then runs the coding
+backend. It persists every translated event before publishing it live.
 
-It provides:
+### Pi Agent Backend
 
-- the local HTTP API;
-- a project-scoped Server-Sent Events stream for live task and trace updates;
-- first-run provider and model setup;
-- task state retrieval;
-- incremental trace retrieval;
-- project page delivery; and
-- application startup and shutdown.
+`@babybot/pi-backend` embeds Pi through its SDK. It manages:
 
-### Project Module
+- isolated Pi configuration under the Babybot data directory;
+- DeepSeek and OpenRouter API-key setup;
+- model discovery and direct provider diagnostics;
+- persistent session creation and restoration;
+- one active in-process runtime per saved session;
+- streamed message, thinking, step, tool, retry, and compaction events;
+- cancellation and token/context usage; and
+- translation into Babybot's stable `AgentEvent` protocol.
 
-Maintains persistent projects.
+The old kimi-code adapter remains only as an explicit rollback backend while
+the Pi migration is validated.
 
-Each project contains:
+### Tool Runtime
 
-- project information;
-- goals and current state;
-- tasks and conversations;
-- artifacts and generated files; and
-- project-specific software.
+The provider-neutral Tool Runtime resolves tools for a project. Tool sources
+are:
 
-### Task Module
+- `builtin`: Pi coding tools;
+- `native`: Babybot-owned tools;
+- `generated`: project-generated tools; and
+- `mcp`: external MCP tools.
 
-Represents work requested by the user.
+The current implementation enables only `read`, `write`, `edit`, and `bash`.
+Native, generated, MCP, WebSearch, and WebFetch implementations are deferred,
+but they must enter through this boundary instead of coupling Core to Pi.
+Pi loads project `AGENTS.md` context, while its automatic extension, skill,
+prompt-template, and theme discovery is disabled. This prevents a project from
+bypassing the Babybot tool registry during the initial migration.
 
-It manages:
-
-- task input;
-- current task status;
-- execution results;
-- errors and retries; and
-- detailed model, context, cache, and token usage.
-
-### Orchestration Module
-
-Selects how to complete a task.
-
-It can:
-
-1. produce a direct result;
-2. run existing software;
-3. combine existing capabilities; or
-4. request new software from the Agent Backend Module.
+Tools are intentionally not subject to per-call approval inside a
+project-owned workspace. The initial runtime is trusted-local. A working
+directory and file-path validation do not constrain arbitrary Bash commands,
+so host isolation must be added behind a future Project Runtime boundary before
+the runtime is described as sandboxed.
 
 ### Capability Runtime
 
-Runs software already available to Babybot.
-
-It manages:
-
-- capability discovery;
-- software execution;
-- inputs and outputs;
-- execution status; and
-- capability versions.
-
-### Agent Backend Module
-
-Provides a stable session-oriented interface to the coding agent.
-
-The current implementation uses the kimi-code SDK. The stable contract is
-limited to capabilities implemented and tested with kimi-code.
-
-This module manages:
-
-- DeepSeek and OpenRouter provider configuration through kimi-code;
-- API-key validation and tool-capable model discovery;
-- minimal direct provider chat diagnostics that bypass agent sessions;
-- OpenRouter free-model filtering and compatibility-based recommendation;
-- agent session creation and resumption;
-- project workspaces;
-- streamed message, thinking, and tool events;
-- cancellation; and
-- token and cache usage.
+Capabilities are reusable workflows selected as a whole-task execution route.
+They are distinct from tools invoked inside an agent turn. Generated
+capabilities remain untrusted until validation and lifecycle support exist.
 
 ### Execution Trace
-
-Every translated agent event is assigned a task-local sequence number and
-written to SQLite before it is consumed as task output. The trace contains
-turns, steps, model status, message and thinking deltas, tool activity, retries,
-subagent activity, compaction, warnings, completion, failures, and unrecognized
-kimi-code events.
 
 ```mermaid
 sequenceDiagram
     participant UI as Web App
     participant API as Local Server
     participant Core as Task Orchestrator
-    participant Adapter as kimi-code Adapter
-    participant SDK as kimi-code SDK
+    participant Adapter as Pi Backend
+    participant Runtime as Pi Agent Runtime
     participant DB as SQLite
 
     UI->>API: Create task
-    API-->>UI: 202 Pending task
-    Core->>Adapter: Run prompt in persistent session
-    Adapter->>SDK: Session.prompt()
-    SDK-->>Adapter: Event stream
-    Adapter-->>Core: Provider-neutral AgentEvent
-    Core->>DB: Append event with sequence
-    Core-->>API: Publish persisted task and trace update
+    API-->>UI: 202 Pending
+    Core->>Adapter: Create or resume project session
+    Adapter->>Runtime: prompt(input)
+    Runtime-->>Adapter: Pi events
+    Adapter-->>Core: AgentEvent stream
+    Core->>DB: Append ordered trace
+    Core-->>API: Publish persisted update
     API-->>UI: Server-Sent Event
-    Core->>SDK: Session.getStatus()
-    Core->>DB: Save final usage and task result
+    Core->>DB: Save result and usage
 ```
 
-The Web App opens one project-scoped SSE connection instead of polling. Core
-publishes task changes and trace events only after they are persisted. On initial
-connection and reconnection, the Web App reads the current task list and trace
-events after its last task-local sequence, closing the race between durable state
-and live delivery. Task creation and cancellation remain regular HTTP requests.
+The Trace contains task-local sequence numbers, session IDs, turns, message and
+thinking deltas, tool activity, retries, compaction, warnings, completion,
+failures, and unknown runtime events. The main UI may collapse tool details,
+but the durable trace remains available for debugging and audit.
 
-The Babybot trace is the product-facing diagnostic record. kimi-code
-`wire.jsonl` and session logs remain the lower-level runtime record. Both use
-the same persisted kimi-code session ID for correlation.
+### Model Setup and Credentials
+
+The setup API supports DeepSeek and OpenRouter API keys. Pi credentials are
+stored in `.babybot/pi/auth.json` with owner-only permissions. Selected model
+metadata and session JSONL files also remain under `.babybot/pi`. SQLite stores
+only redacted catalogs, Babybot session references, tasks, and traces.
+
+The direct chat diagnostic calls the selected provider with a fixed short
+prompt and does not create a Pi session. It distinguishes provider/account
+failures from runtime failures without returning credentials.
+
+## Stable Contracts
 
 ```mermaid
 flowchart LR
     Backend["AgentBackend"] --> Session["AgentSession"]
     Session --> Run["run(prompt)"]
-    Run --> Events["Async AgentEvent Stream"]
+    Run --> Events["Async AgentEvent stream"]
     Session --> Cancel["cancel()"]
     Session --> Usage["getUsage()"]
+    ToolRuntime["AgentToolRuntime"] --> Descriptors["AgentToolDescriptor[]"]
 ```
 
-Approval, question, background-task, and sandbox APIs are not included until
-Babybot implements their complete control flow.
-
-### Model Setup
-
-Babybot never calls the model provider directly for agent execution. The local
-setup API passes DeepSeek or OpenRouter credentials to the kimi-code backend,
-which validates the key, discovers models, and persists the selected provider
-and model alias through `KimiHarness.setConfig()`.
-
-The Babybot API returns only provider name, model ID, and whether a key exists.
-It never returns the key. The key is stored in kimi-code's local configuration,
-not Babybot's SQLite database. Reconfiguration removes Babybot's saved
-kimi-code session references so later tasks start with the new model.
-
-Successful model discovery stores a redacted provider model catalog in SQLite,
-including free/paid and capability metadata. Reopening model settings reads this
-catalog without requiring the credential again. Refreshing the catalog still
-requires a matching credential, but both refresh and switching between cached
-models can reuse the provider key already stored by kimi-code.
-
-The setup API also exposes a minimal direct chat diagnostic. It reads the
-selected provider key through the backend boundary, then calls the provider's
-OpenAI-compatible `chat/completions` endpoint directly with a fixed short prompt
-and no agent session, system prompt, tools, or persisted conversation. The
-response reports the provider HTTP status, latency, model, content, and request
-ID when available without returning the API key.
-
-### Storage Module
-
-Stores Babybot data locally.
-
-It manages:
-
-- project metadata;
-- task and conversation history;
-- generated artifacts;
-- capability source and versions;
-- execution records;
-- ordered agent trace events and detailed usage;
-- and configuration.
+Backend contract tests cover event translation, persistent session reuse,
+cancellation, token accounting, and tool resolution.
 
 ## Implementation Layout
 
@@ -217,72 +146,23 @@ It manages:
 | --- | --- |
 | Web App | `apps/web` |
 | Local Server | `apps/server` |
-| Project and Task Modules | `packages/core` |
-| Orchestration Module | `packages/core` |
+| Project, Task, and Orchestration Core | `packages/core` |
 | Capability Runtime | `packages/capability-runtime` |
-| Agent Backend Module | `packages/kimi-code-backend` |
-| Storage Module | `packages/storage` |
+| Tool Runtime | `packages/tool-runtime` |
+| Pi Agent Backend | `packages/pi-backend` |
+| Temporary rollback backend | `packages/kimi-code-backend` |
+| Storage | `packages/storage` |
 | Shared HTTP contracts | `packages/contracts` |
 
-The Local Server is the composition root. Core depends only on shared contracts
-and provider-neutral interfaces. Storage, capability runtime, and coding
-backends implement those interfaces. The Web App communicates through the HTTP
-API and its SSE event stream.
+Core depends only on contracts. The server composes storage, capability,
+tool-runtime, and agent-backend implementations.
 
-## Technology
+## Deferred Work
 
-- Node.js 24 and TypeScript;
-- pnpm workspaces;
-- Fastify local server;
-- React and Vite Web App;
-- SQLite local storage;
-- Vitest tests; and
-- oxlint static analysis.
-
-These choices keep Babybot in one language, avoid a separate database service,
-and preserve explicit package boundaries without a large framework.
-
-DeepSeek is selected through a model alias configured in kimi-code. Babybot
-passes the alias through the Agent Backend Module and does not contain
-provider-specific DeepSeek API code.
-
-## Module Dependency
-
-```text
-Web App
-  -> Local Server
-    -> Project Module
-    -> Task Module
-      -> Orchestration Module
-        -> Capability Runtime
-        -> Agent Backend Module
-          -> kimi-code SDK
-    -> Storage Module
-```
-
-The Web App communicates only with the Local Server.
-
-The Project and Task modules contain Babybot product state.
-
-The Orchestration Module selects an execution path and consumes the stable
-agent event stream.
-
-The Agent Backend Module contains all kimi-code-specific integration.
-
-The Storage Module does not depend on kimi-code.
-
-## Initial Implementation
-
-The first implementation contains:
-
-- Web App;
-- Local Server;
-- Project Module;
-- Task Module;
-- Orchestration Module;
-- Agent Backend Module with kimi-code;
-- Capability Runtime; and
-- Storage Module.
-
-Model routing, personal modeling, desktop packaging, and background scheduling
-can be added as separate modules later.
+- strong project sandboxing;
+- native and generated tool loading;
+- MCP, WebSearch, and WebFetch;
+- ChatGPT/Codex OAuth;
+- generated-capability validation;
+- background scheduling; and
+- desktop packaging.
