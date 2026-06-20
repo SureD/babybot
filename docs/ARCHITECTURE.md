@@ -3,7 +3,8 @@
 ## Ownership
 
 Babybot is the product and control plane. It owns projects, workspaces, tasks,
-orchestration, tools, capabilities, execution traces, credentials, and storage.
+orchestration, the agent harness, tools, capabilities, execution traces,
+credentials, and storage.
 Pi is an embedded agent runtime dependency. It owns the model loop, provider
 transport, session history, compaction, and built-in coding tool
 implementations.
@@ -17,7 +18,8 @@ flowchart LR
     Web["Web App"] --> Server["Local Server"]
     Server --> Core["Project and Task Core"]
     Core --> Capability["Capability Runtime"]
-    Core --> Agent["Agent Backend"]
+    Core --> Harness["Agent Harness"]
+    Harness --> Agent["Agent Backend"]
     Agent --> Pi["Pi Agent Runtime"]
     Pi --> Provider["DeepSeek / OpenRouter"]
     Pi --> Tools["Tool Runtime"]
@@ -57,6 +59,19 @@ backend. It persists every translated event before publishing it live.
 The old kimi-code adapter remains only as an explicit rollback backend while
 the Pi migration is validated.
 
+### Agent Harness
+
+`@babybot/agent-harness` owns provider-neutral agent profiles and system prompt
+rendering. The default `general` profile supports direct answers, research,
+coding, and mixed tasks. It receives the project identity, workspace, and
+resolved tool names at session creation. Pi remains responsible for the model
+loop and session history, but runs with Babybot's product identity and
+operating contract instead of Pi's default coding-assistant prompt.
+
+Project `AGENTS.md` files are loaded separately as scoped instructions. Dynamic
+project memory and task-local context remain future Harness inputs and must not
+be conflated with the stable system prompt.
+
 ### Tool Runtime
 
 The provider-neutral Tool Runtime resolves tools for a project. Tool sources
@@ -67,9 +82,12 @@ are:
 - `generated`: project-generated tools; and
 - `mcp`: external MCP tools.
 
-The current implementation enables only `read`, `write`, `edit`, and `bash`.
-Native, generated, MCP, WebSearch, and WebFetch implementations are deferred,
-but they must enter through this boundary instead of coupling Core to Pi.
+The current implementation enables Pi's `read`, `write`, `edit`, and `bash`,
+plus the Babybot-native `web_fetch` executable tool. `web_search` is enabled
+when a Tavily API key is configured. Native tools expose provider-neutral
+descriptions, JSON input schemas, and execute functions; the Pi adapter
+translates them to Pi custom tools. Generated and MCP tools remain deferred and
+must enter through this boundary instead of coupling Core to Pi.
 Pi loads project `AGENTS.md` context, while its automatic extension, skill,
 prompt-template, and theme discovery is disabled. This prevents a project from
 bypassing the Babybot tool registry during the initial migration.
@@ -134,7 +152,9 @@ flowchart LR
     Run --> Events["Async AgentEvent stream"]
     Session --> Cancel["cancel()"]
     Session --> Usage["getUsage()"]
-    ToolRuntime["AgentToolRuntime"] --> Descriptors["AgentToolDescriptor[]"]
+    ToolRuntime["AgentToolRuntime"] --> Tools["ResolvedAgentTool[]"]
+    Tools --> Descriptors["builtin descriptors"]
+    Tools --> Executable["native executable tools"]
 ```
 
 Backend contract tests cover event translation, persistent session reuse,
@@ -147,6 +167,7 @@ cancellation, token accounting, and tool resolution.
 | Web App | `apps/web` |
 | Local Server | `apps/server` |
 | Project, Task, and Orchestration Core | `packages/core` |
+| Agent profiles and system prompts | `packages/agent-harness` |
 | Capability Runtime | `packages/capability-runtime` |
 | Tool Runtime | `packages/tool-runtime` |
 | Pi Agent Backend | `packages/pi-backend` |
@@ -160,8 +181,9 @@ tool-runtime, and agent-backend implementations.
 ## Deferred Work
 
 - strong project sandboxing;
-- native and generated tool loading;
-- MCP, WebSearch, and WebFetch;
+- additional native and generated tool loading;
+- MCP;
+- durable project memory and task-local context assembly;
 - ChatGPT/Codex OAuth;
 - generated-capability validation;
 - background scheduling; and

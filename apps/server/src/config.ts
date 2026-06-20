@@ -14,6 +14,9 @@ export interface ServerConfig {
     readonly agentDir?: string;
     readonly model?: string;
   };
+  readonly web?: {
+    readonly tavilyApiKey?: string;
+  };
   readonly kimi: {
     readonly sdkPath?: string;
     readonly homeDir?: string;
@@ -47,6 +50,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Server
         ? {}
         : { model: environment['BABYBOT_PI_MODEL'] }),
     },
+    web:
+      environment['BABYBOT_TAVILY_API_KEY'] === undefined ||
+      environment['BABYBOT_TAVILY_API_KEY'].trim() === ''
+        ? {}
+        : { tavilyApiKey: environment['BABYBOT_TAVILY_API_KEY'] },
     kimi: {
       ...(environment['KIMI_CODE_SDK_PATH'] === undefined ||
       environment['KIMI_CODE_SDK_PATH'].trim() === ''

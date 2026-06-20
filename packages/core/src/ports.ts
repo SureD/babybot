@@ -71,13 +71,39 @@ export interface AgentToolDescriptor {
   readonly enabled: boolean;
 }
 
+export interface AgentToolExecutionContext {
+  readonly projectId: string;
+  readonly workDir: string;
+  readonly signal?: AbortSignal;
+}
+
+export interface AgentToolExecutionResult {
+  readonly content: string;
+  readonly details?: unknown;
+}
+
+export interface AgentExecutableTool extends AgentToolDescriptor {
+  readonly label: string;
+  readonly description: string;
+  readonly inputSchema: Readonly<Record<string, unknown>>;
+  readonly promptSnippet?: string;
+  readonly promptGuidelines?: readonly string[];
+  readonly executionMode?: 'sequential' | 'parallel';
+  execute(
+    input: Readonly<Record<string, unknown>>,
+    context: AgentToolExecutionContext,
+  ): Promise<AgentToolExecutionResult>;
+}
+
+export type ResolvedAgentTool = AgentToolDescriptor | AgentExecutableTool;
+
 export interface ResolveAgentToolsInput {
   readonly projectId: string;
   readonly workDir: string;
 }
 
 export interface AgentToolRuntime {
-  resolve(input: ResolveAgentToolsInput): Promise<readonly AgentToolDescriptor[]>;
+  resolve(input: ResolveAgentToolsInput): Promise<readonly ResolvedAgentTool[]>;
 }
 
 export interface AgentBackendCapabilities {
@@ -90,6 +116,7 @@ export interface AgentBackendCapabilities {
 
 export interface CreateAgentSessionInput {
   readonly projectId: string;
+  readonly projectName: string;
   readonly workDir: string;
 }
 

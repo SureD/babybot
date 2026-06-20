@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { AgentSessionEvent, SessionStats } from '@earendil-works/pi-coding-agent';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentToolRuntime } from '@babybot/core';
+import type { AgentExecutableTool, AgentToolRuntime } from '@babybot/core';
 
 import {
   PiAgentBackend,
@@ -35,6 +35,7 @@ describe('PiAgentBackend', () => {
         return [
           { name: 'read', source: 'builtin', enabled: true },
           { name: 'write', source: 'builtin', enabled: true },
+          testNativeTool(),
           { name: 'disabled', source: 'native', enabled: false },
         ];
       },
@@ -53,6 +54,7 @@ describe('PiAgentBackend', () => {
     });
     const runtime = await backend.createSession({
       projectId: 'project-1',
+      projectName: 'Test project',
       workDir: '/tmp/project-1',
     });
     const events = [];
@@ -60,15 +62,27 @@ describe('PiAgentBackend', () => {
       events.push(event);
     }
 
-    expect(factory.createInputs).toEqual([
-      {
-        projectId: 'project-1',
-        workDir: '/tmp/project-1',
-        provider: 'openrouter',
-        model: 'vendor/coder',
-        tools: ['read', 'write'],
-      },
+    expect(factory.createInputs).toHaveLength(1);
+    expect(factory.createInputs[0]).toMatchObject({
+      projectId: 'project-1',
+      projectName: 'Test project',
+      workDir: '/tmp/project-1',
+      provider: 'openrouter',
+      model: 'vendor/coder',
+      tools: ['read', 'write', 'test_native'],
+    });
+    expect(factory.createInputs[0]?.customTools.map((tool) => tool.name)).toEqual([
+      'test_native',
     ]);
+    expect(factory.createInputs[0]?.systemPrompt).toContain(
+      'persistent general-purpose project agent',
+    );
+    expect(factory.createInputs[0]?.systemPrompt).toContain(
+      'Project name: "Test project"',
+    );
+    expect(factory.createInputs[0]?.systemPrompt).toContain(
+      'Available tools:\n- read\n- write\n- test_native',
+    );
     expect(events).toEqual([
       { type: 'run.started', turnId: 1 },
       { type: 'step.started', turnId: 1, step: 1 },
@@ -145,6 +159,7 @@ describe('PiAgentBackend', () => {
     });
     const runtime = await restarted.resumeSession({
       projectId: 'project-1',
+      projectName: 'Test project',
       workDir: '/tmp/project-1',
       sessionId: 'pi-session-1',
     });
@@ -157,14 +172,14 @@ describe('PiAgentBackend', () => {
     expect(resumedSession.abortCalls).toBe(1);
   });
 
-  it('creates a real Pi SDK session without loading optional resources', async () => {
+  it('creates a real Pi SDK session with Babybot native tools', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'babybot-pi-'));
     temporaryDirectories.push(directory);
     const workDir = join(directory, 'project');
     await mkdir(workDir);
     const backend = new PiAgentBackend({
       agentDir: join(directory, 'pi'),
-      toolRuntime: emptyToolRuntime(),
+      toolRuntime: nativeToolRuntime(),
       fetchImpl: openRouterFetch,
     });
     await backend.configure({
@@ -175,6 +190,7 @@ describe('PiAgentBackend', () => {
 
     const runtime = await backend.createSession({
       projectId: 'project-1',
+      projectName: 'Test project',
       workDir,
     });
 
@@ -318,6 +334,35 @@ function emptyToolRuntime(): AgentToolRuntime {
   return {
     async resolve() {
       return [];
+    },
+  };
+}
+
+function nativeToolRuntime(): AgentToolRuntime {
+  return {
+    async resolve() {
+      return [testNativeTool()];
+    },
+  };
+}
+
+function testNativeTool(): AgentExecutableTool {
+  return {
+    name: 'test_native',
+    label: 'Test native tool',
+    source: 'native',
+    enabled: true,
+    description: 'Return a test value.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        value: { type: 'string' },
+      },
+      required: ['value'],
+      additionalProperties: false,
+    },
+    async execute(input) {
+      return { content: String(input['value']) };
     },
   };
 }

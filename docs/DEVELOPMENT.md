@@ -53,7 +53,13 @@ tasks. The default project tools are resolved by `@babybot/tool-runtime`:
 - `read`;
 - `write`;
 - `edit`; and
-- `bash`.
+- `bash`;
+- `web_fetch`; and
+- `web_search` when `BABYBOT_TAVILY_API_KEY` is configured.
+
+`@babybot/agent-harness` renders the default general-purpose Babybot profile.
+The prompt includes the project identity, workspace, and exact resolved tool
+names. Pi also loads applicable project `AGENTS.md` files as scoped context.
 
 These tools run without per-call approval because the workspace belongs to the
 project. The current implementation is a trusted-local runtime, not a security
@@ -61,9 +67,9 @@ sandbox: Pi's `cwd` scopes normal operation but does not prevent Bash from
 accessing other host paths. Future isolation belongs behind a project runtime
 boundary.
 
-Native, generated, and MCP tool sources are represented in the Core contract
-but are not loaded yet. WebSearch, WebFetch, MCP, generated-tool loading, and
-ChatGPT OAuth are outside the current migration scope.
+Native executable tools are represented in the Core contract and translated
+to Pi custom tools by `@babybot/pi-backend`. Generated and MCP tool loading and
+ChatGPT OAuth remain outside the current migration scope.
 
 Pi still loads `AGENTS.md` files from the project hierarchy. Automatic Pi
 extension, skill, prompt-template, and theme discovery is disabled so all
@@ -92,7 +98,8 @@ Use these breakpoints to follow one request:
    persistence, and completion.
 3. `packages/pi-backend/src/index.ts`: Pi runtime creation and event
    translation.
-4. `packages/tool-runtime/src/index.ts`: enabled project tools.
+4. `packages/agent-harness/src/index.ts`: agent profiles and system prompts.
+5. `packages/tool-runtime/src/index.ts`: enabled project tools and execution.
 
 Babybot stores tasks and translated events in `.babybot/babybot.sqlite`.
 

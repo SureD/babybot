@@ -9,13 +9,19 @@ import {
   SessionManager,
   type AgentSessionEvent,
   type SessionStats,
+  type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
+import {
+  generalAgentProfile,
+  type AgentProfile,
+} from '@babybot/agent-harness';
 import type {
   AgentBackend,
   AgentBackendCapabilities,
   AgentEvent,
   AgentRunInput,
   AgentSession,
+  AgentExecutableTool,
   AgentToolRuntime,
   AgentUsage,
   ConfigureModelInput,
@@ -50,10 +56,13 @@ export interface PiSessionLike {
 
 export interface PiRuntimeInput {
   readonly projectId: string;
+  readonly projectName: string;
   readonly workDir: string;
   readonly provider: string;
   readonly model: string;
   readonly tools: readonly string[];
+  readonly customTools: readonly AgentExecutableTool[];
+  readonly systemPrompt: string;
 }
 
 export interface PiRuntimeFactory {
@@ -65,6 +74,7 @@ export interface PiRuntimeFactory {
 export interface PiAgentBackendOptions {
   readonly agentDir: string;
   readonly toolRuntime: AgentToolRuntime;
+  readonly agentProfile?: AgentProfile;
   readonly model?: string;
   readonly fetchImpl?: typeof fetch;
   readonly runtimeFactory?: PiRuntimeFactory;
@@ -295,14 +305,25 @@ export class PiAgentBackend implements AgentBackend {
       throw new Error('Pi is not configured. Choose a provider and model first.');
     }
     const descriptors = await this.options.toolRuntime.resolve(input);
+    const tools = descriptors
+      .filter((tool) => tool.enabled)
+      .map((tool) => tool.name);
+    const customTools = descriptors.filter(isExecutableTool).filter((tool) => tool.enabled);
+    const profile = this.options.agentProfile ?? generalAgentProfile;
     return {
       projectId: input.projectId,
+      projectName: input.projectName,
       workDir: input.workDir,
       provider: configuration.provider,
       model: this.options.model ?? configuration.model,
-      tools: descriptors
-        .filter((tool) => tool.enabled)
-        .map((tool) => tool.name),
+      tools,
+      customTools,
+      systemPrompt: profile.renderSystemPrompt({
+        projectId: input.projectId,
+        projectName: input.projectName,
+        workDir: input.workDir,
+        toolNames: tools,
+      }),
     };
   }
 
@@ -492,10 +513,12 @@ class SdkPiRuntimeFactory implements PiRuntimeFactory {
       modelRegistry: this.modelRegistry,
       model,
       tools: [...input.tools],
+      customTools: input.customTools.map((tool) => adaptTool(tool, input)),
       sessionManager,
       resourceLoader: new DefaultResourceLoader({
         cwd: input.workDir,
         agentDir: this.agentDir,
+        systemPrompt: input.systemPrompt,
         noExtensions: true,
         noSkills: true,
         noPromptTemplates: true,
@@ -508,6 +531,40 @@ class SdkPiRuntimeFactory implements PiRuntimeFactory {
   private sessionDirectory(projectId: string): string {
     return join(this.agentDir, 'sessions', projectId);
   }
+}
+
+function isExecutableTool(
+  tool: Awaited<ReturnType<AgentToolRuntime['resolve']>>[number],
+): tool is AgentExecutableTool {
+  return 'execute' in tool && typeof tool.execute === 'function';
+}
+
+function adaptTool(
+  tool: AgentExecutableTool,
+  input: PiRuntimeInput,
+): ToolDefinition {
+  return {
+    name: tool.name,
+    label: tool.label,
+    description: tool.description,
+    parameters: tool.inputSchema as ToolDefinition['parameters'],
+    ...(tool.promptSnippet === undefined ? {} : { promptSnippet: tool.promptSnippet }),
+    ...(tool.promptGuidelines === undefined
+      ? {}
+      : { promptGuidelines: [...tool.promptGuidelines] }),
+    ...(tool.executionMode === undefined ? {} : { executionMode: tool.executionMode }),
+    async execute(_toolCallId, parameters, signal) {
+      const result = await tool.execute(parameters as Readonly<Record<string, unknown>>, {
+        projectId: input.projectId,
+        workDir: input.workDir,
+        ...(signal === undefined ? {} : { signal }),
+      });
+      return {
+        content: [{ type: 'text', text: result.content }],
+        details: result.details ?? {},
+      };
+    },
+  };
 }
 
 interface TranslationState {

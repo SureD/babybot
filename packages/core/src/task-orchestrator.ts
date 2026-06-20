@@ -74,6 +74,10 @@ export class TaskOrchestrator {
   private async execute(task: Task): Promise<Task> {
     try {
       task = await this.update(task, { status: 'running' });
+      const project = await this.dependencies.projects.getProject(task.projectId);
+      if (project === undefined) {
+        throw new Error(`Project "${task.projectId}" was not found.`);
+      }
       const capability =
         task.preference === 'coding'
           ? undefined
@@ -105,10 +109,12 @@ export class TaskOrchestrator {
         sessionId === undefined
           ? await this.dependencies.agentBackend.createSession({
               projectId: task.projectId,
+              projectName: project.name,
               workDir,
             })
           : await this.dependencies.agentBackend.resumeSession({
               projectId: task.projectId,
+              projectName: project.name,
               workDir,
               sessionId,
             });

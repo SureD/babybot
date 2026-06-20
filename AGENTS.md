@@ -7,6 +7,8 @@ The repository is a pnpm workspace:
 - `apps/server` contains the Fastify local server and composition root.
 - `apps/web` contains the React/Vite browser interface.
 - `packages/core` contains use cases and the provider-neutral agent protocol.
+- `packages/agent-harness` owns provider-neutral agent profiles and system
+  prompts.
 - `packages/storage` owns SQLite persistence and project directories.
 - `packages/pi-backend` embeds the Pi agent runtime and translates Pi events.
 - `packages/tool-runtime` owns the provider-neutral project tool registry.
@@ -16,24 +18,26 @@ The repository is a pnpm workspace:
 - `docs` contains product, architecture, and development documentation.
 
 Babybot owns the Web app, local server, project and task state, orchestration,
-tool and capability runtimes, project workspaces, and storage. Pi owns the
-agent loop, model transport, session history, compaction, and built-in coding
-tool implementations. Keep Pi types inside `packages/pi-backend`.
+agent profiles and prompts, tool and capability runtimes, project workspaces,
+and storage. Pi owns the agent loop, model transport, session history,
+compaction, and built-in coding tool implementations. Keep Pi types inside
+`packages/pi-backend`.
 
 Each project has one persistent Pi session and a project-owned workspace. The
-default tools are `read`, `write`, `edit`, and `bash`. They are intentionally
-available without per-call approval inside the project runtime. A working
-directory is not a security boundary: do not describe the current trusted-local
-runtime as sandboxed, and route future isolation through a project runtime
-boundary instead of provider-specific checks.
+default tools are `read`, `write`, `edit`, `bash`, and `web_fetch`.
+`web_search` is enabled when a search provider is configured. They are
+intentionally available without per-call approval inside the project runtime.
+A working directory is not a security boundary: do not describe the current
+trusted-local runtime as sandboxed, and route future isolation through a
+project runtime boundary instead of provider-specific checks.
 
 Tool sources are `builtin`, `native`, `generated`, and `mcp`. New tools must
 enter through the provider-neutral Tool Runtime rather than importing Pi into
 Core. Generated tools remain untrusted until validation is implemented. MCP,
-WebSearch, WebFetch, generated-tool loading, and ChatGPT OAuth are explicitly
-out of scope for the current Pi migration. Pi may load project `AGENTS.md`
-context, but automatic extension, skill, prompt-template, and theme discovery
-must remain disabled until Babybot owns their lifecycle and trust policy.
+generated-tool loading, and ChatGPT OAuth are explicitly out of scope for the
+current Pi migration. Pi may load project `AGENTS.md` context, but automatic
+extension, skill, prompt-template, and theme discovery must remain disabled
+until Babybot owns their lifecycle and trust policy.
 
 Place tests under the owning module's `test/` directory. Avoid new cross-module
 dependencies without updating `docs/ARCHITECTURE.md`.

@@ -27,7 +27,10 @@ import {
 } from '@babybot/kimi-code-backend';
 import { PiAgentBackend } from '@babybot/pi-backend';
 import { FileProjectWorkspace, SqliteStorage } from '@babybot/storage';
-import { ProjectToolRuntime } from '@babybot/tool-runtime';
+import {
+  ProjectToolRuntime,
+  TavilyWebSearchProvider,
+} from '@babybot/tool-runtime';
 
 import type { ServerConfig } from './config';
 import { ProjectEventHub } from './project-events';
@@ -44,7 +47,15 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   const app = Fastify({ logger: options.logger ?? true });
   const storage = new SqliteStorage(join(options.config.dataDir, 'babybot.sqlite'));
   const workspaces = new FileProjectWorkspace(join(options.config.dataDir, 'projects'));
-  const toolRuntime = new ProjectToolRuntime();
+  const toolRuntime = new ProjectToolRuntime(
+    options.config.web?.tavilyApiKey === undefined
+      ? {}
+      : {
+          webSearchProvider: new TavilyWebSearchProvider({
+            apiKey: options.config.web.tavilyApiKey,
+          }),
+        },
+  );
   const agentBackend =
     options.agentBackend ?? createAgentBackend(options.config, toolRuntime);
   const projectService = new ProjectService(storage, workspaces);

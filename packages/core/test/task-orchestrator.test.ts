@@ -22,6 +22,8 @@ function createFixture() {
   const publishedTasks: Task[] = [];
   let sessionId: string | undefined;
   const runInputs: AgentRunInput[] = [];
+  const createdProjects: string[] = [];
+  const resumedProjects: string[] = [];
   const resumedSessions: string[] = [];
   const agentSession: AgentSession = {
     id: 'session-1',
@@ -139,11 +141,13 @@ function createFixture() {
       async testChat() {
         throw new Error('Unexpected chat test.');
       },
-      async createSession() {
+      async createSession(input) {
+        createdProjects.push(input.projectName);
         return agentSession;
       },
       async resumeSession(input) {
         resumedSessions.push(input.sessionId);
+        resumedProjects.push(input.projectName);
         return agentSession;
       },
       async close() {},
@@ -153,6 +157,8 @@ function createFixture() {
   return {
     orchestrator: new TaskOrchestrator(dependencies),
     runInputs,
+    createdProjects,
+    resumedProjects,
     resumedSessions,
     traces,
     publishedTraces,
@@ -211,6 +217,8 @@ describe('TaskOrchestrator', () => {
       { prompt: 'First task' },
       { prompt: 'Second task' },
     ]);
+    expect(fixture.createdProjects).toEqual(['Test project']);
+    expect(fixture.resumedProjects).toEqual(['Test project']);
     expect(fixture.resumedSessions).toEqual(['session-1']);
   });
 });

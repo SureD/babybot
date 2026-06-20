@@ -84,6 +84,8 @@ importers:
         specifier: 19.2.7
         version: 19.2.7(react@19.2.7)
 
+  packages/agent-harness: {}
+
   packages/capability-runtime:
     dependencies:
       '@babybot/core':
@@ -110,6 +112,9 @@ importers:
 
   packages/pi-backend:
     dependencies:
+      '@babybot/agent-harness':
+        specifier: workspace:*
+        version: link:../agent-harness
       '@babybot/core':
         specifier: workspace:*
         version: link:../core

@@ -45,6 +45,7 @@ describe('KimiCodeAgentBackend', () => {
 
       const session = await backend.createSession({
         projectId: 'project-1',
+        projectName: 'Test project',
         workDir: '/tmp/project-1',
       });
       const events = [];
@@ -130,6 +131,7 @@ describe('KimiCodeAgentBackend', () => {
     try {
       const session = await backend.resumeSession({
         projectId: 'project-1',
+        projectName: 'Test project',
         workDir: '/tmp/project-1',
         sessionId: 'fake-session',
       });
