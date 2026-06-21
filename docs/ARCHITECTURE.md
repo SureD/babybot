@@ -72,6 +72,26 @@ Project `AGENTS.md` files are loaded separately as scoped instructions. Dynamic
 project memory and task-local context remain future Harness inputs and must not
 be conflated with the stable system prompt.
 
+### Agent Foundation
+
+`@babybot/agent` defines the provider-neutral contracts described by
+DESIGN-001. It groups Context, Turn, Tools, Observer, Prompter, Permission, and
+Session behind one package, with a narrow Backend port for Pi. The package is
+currently an interface boundary only; the existing Core-to-Pi execution path
+remains active until these contracts receive implementations and are composed
+into the server.
+
+Only the Backend adapter may import Pi SDK types. Tool calls from both Pi
+builtins and Babybot-hosted tools must pass the same Permission hook before
+execution. Context is the logical context owner while the backend remains the
+physical owner of transcript storage and compaction.
+
+The lifecycle is deliberately linear: `Session.prompt(input)` creates an
+already-running Turn; that Turn freezes the current mode, Context snapshot, and
+Tool snapshot, asks Prompter for injections, and drives Backend. Tool calls are
+checked by Permission before Backend or Tools executes them. Context never
+queues Turns, and Session never runs an agent loop.
+
 ### Tool Runtime
 
 The provider-neutral Tool Runtime resolves tools for a project. Tool sources
@@ -167,6 +187,7 @@ cancellation, token accounting, and tool resolution.
 | Web App | `apps/web` |
 | Local Server | `apps/server` |
 | Project, Task, and Orchestration Core | `packages/core` |
+| Provider-neutral Agent foundation contracts | `packages/agent` |
 | Agent profiles and system prompts | `packages/agent-harness` |
 | Capability Runtime | `packages/capability-runtime` |
 | Tool Runtime | `packages/tool-runtime` |

@@ -1,0 +1,17 @@
+{
+  "name": "@babybot/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./backend": "./src/backend/index.ts",
+    "./context": "./src/context/index.ts",
+    "./observer": "./src/observer/index.ts",
+    "./permission": "./src/permission/index.ts",
+    "./prompter": "./src/prompter/index.ts",
+    "./session": "./src/session/index.ts",
+    "./tools": "./src/tools/index.ts",
+    "./turn": "./src/turn/index.ts"
+  }
+}

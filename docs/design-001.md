@@ -218,9 +218,13 @@ Turn 内可以包含多个 model step 和多个 tool call。
 
 | 操作 | 语义 |
 | --- | --- |
-| `run(input)` | 启动 Turn，并返回事件流与最终结果 |
+| `events` | 当前 Turn 的事件流 |
+| `result` | 当前 Turn 的最终结果 Promise |
 | `steer(input)` | 将新输入注入当前 Turn |
 | `cancel(reason?)` | 取消当前 Turn |
+
+Turn 由 `Session.prompt(input)` 创建时立即启动，不再额外暴露 `run(input)`，
+也不再定义一个与 Turn 重复的 `TurnHandle`。
 
 状态机保持简单：
 
@@ -441,7 +445,7 @@ Mode 是配置，不单独成为组件。每个 mode 同时包含：
 - 创建或恢复 Pi BackendSession。
 - 创建并持有 Context、Tools、Observer、Prompter 和 Permission。
 - 保证一个 Session 最多只有一个 active Turn。
-- 创建 Turn 并返回 TurnHandle。
+- 创建并启动 Turn，将 Turn 返回给调用者。
 - 管理当前 mode；mode 只在 Turn 边界切换。
 - 暴露动态工具注册、事件订阅、compact、cancel 和 close。
 - close 时取消 active Turn 并释放 Backend。
@@ -461,7 +465,7 @@ interface AgentSession {
   readonly id: string;
   readonly mode: 'default' | 'plan' | 'build';
 
-  prompt(input: TurnInput): Promise<TurnHandle>;
+  prompt(input: TurnInput): Promise<Turn>;
   setMode(mode: AgentMode): Promise<void>;
 
   registerTool(tool: ToolRegistration): void;
@@ -483,7 +487,7 @@ interface AgentSession {
 
 - 再次 `prompt` 返回 `session.busy`，首版不做隐式队列。
 - `setMode` 和 Tool registry 变更返回 `session.busy`。
-- `steer` 只能通过当前 TurnHandle 调用。
+- `steer` 只能通过当前 Turn 调用。
 
 队列应属于 Agent 之上的 orchestration，而不是这个基础层。
 
@@ -499,9 +503,11 @@ Backend 只处理 Pi 适配，不形成新的领域概念。
 | `run(turnInput)` | 驱动一个 Pi Agent run |
 | `steer(input)` | 转发到 Pi steer |
 | `abort()` | 取消当前 Pi run |
-| `compact(instruction?)` | 调用 Pi compaction |
 | `contextStore()` | 暴露窄 ContextStore port |
 | `close()` | dispose Pi session |
+
+Compaction 只通过 `contextStore().compact(instruction?)` 暴露，避免 BackendSession
+和 ContextStore 提供两套重复入口。
 
 Pi Backend 负责：
 
