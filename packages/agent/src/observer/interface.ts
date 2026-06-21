@@ -55,7 +55,9 @@ export type AgentRecord =
       readonly turnId: string;
       readonly toolCallId: string;
       readonly decision: 'allow' | 'deny';
+      readonly policy: string;
       readonly reason: string;
+      readonly asked: boolean;
     }
   | { readonly type: 'context.compacted'; readonly revision: number }
   | { readonly type: 'warning'; readonly turnId?: string; readonly message: string };

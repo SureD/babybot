@@ -74,12 +74,11 @@ be conflated with the stable system prompt.
 
 ### Agent Foundation
 
-`@babybot/agent` defines the provider-neutral contracts described by
+`@babybot/agent` implements the provider-neutral foundation described by
 DESIGN-001. It groups Context, Turn, Tools, Observer, Prompter, Permission, and
-Session behind one package, with a narrow Backend port for Pi. The package is
-currently an interface boundary only; the existing Core-to-Pi execution path
-remains active until these contracts receive implementations and are composed
-into the server.
+Session behind one package, with a narrow Backend port for Pi. The existing
+Core-to-Pi execution path remains active until the Pi adapter implements this
+new Backend port and the foundation is composed into the server.
 
 Only the Backend adapter may import Pi SDK types. Tool calls from both Pi
 builtins and Babybot-hosted tools must pass the same Permission hook before
@@ -187,7 +186,7 @@ cancellation, token accounting, and tool resolution.
 | Web App | `apps/web` |
 | Local Server | `apps/server` |
 | Project, Task, and Orchestration Core | `packages/core` |
-| Provider-neutral Agent foundation contracts | `packages/agent` |
+| Provider-neutral Agent foundation | `packages/agent` |
 | Agent profiles and system prompts | `packages/agent-harness` |
 | Capability Runtime | `packages/capability-runtime` |
 | Tool Runtime | `packages/tool-runtime` |

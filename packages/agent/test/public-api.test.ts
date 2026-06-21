@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import type {
   AgentMode,
   AgentSession,
+  CreateAgentSessionOptions,
   ToolRegistration,
   Turn,
   TurnInput,
@@ -21,6 +22,7 @@ describe('@babybot/agent contracts', () => {
     expectTypeOf<AgentSession['prompt']>().toEqualTypeOf<
       (input: TurnInput) => Promise<Turn>
     >();
+    expectTypeOf<CreateAgentSessionOptions['workDir']>().toEqualTypeOf<string>();
     expectTypeOf<Turn['result']>().toEqualTypeOf<Promise<TurnResult>>();
     expectTypeOf<ToolRegistration>().toBeObject();
     expectTypeOf<BackendSession['run']>().returns.toMatchTypeOf<
