@@ -29,6 +29,7 @@ export interface ContextSnapshot {
   readonly revision: number;
   readonly entries: readonly ContextEntry[];
   readonly usage?: TokenUsage;
+  readonly model?: string;
   readonly contextTokens?: number;
   readonly contextWindow?: number;
 }

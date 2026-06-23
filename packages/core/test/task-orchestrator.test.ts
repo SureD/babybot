@@ -4,7 +4,6 @@ import type { AgentTraceEvent, Project, Task } from '@babybot/contracts';
 
 import {
   TaskOrchestrator,
-  type AgentRunInput,
   type AgentSession,
   type RuntimeDependencies,
 } from '../src';
@@ -21,22 +20,45 @@ function createFixture() {
   const publishedTraces: AgentTraceEvent[] = [];
   const publishedTasks: Task[] = [];
   let sessionId: string | undefined;
-  const runInputs: AgentRunInput[] = [];
+  const runInputs: Array<{ readonly text: string }> = [];
   const createdProjects: string[] = [];
   const resumedProjects: string[] = [];
   const resumedSessions: string[] = [];
   const agentSession: AgentSession = {
     id: 'session-1',
-    async *run(input) {
+    mode: 'default',
+    async prompt(input) {
       runInputs.push(input);
-      yield { type: 'run.started', turnId: 1 };
-      yield { type: 'message.delta', turnId: 1, text: 'done' };
-      yield { type: 'run.completed', turnId: 1, reason: 'completed' };
-    },
-    async cancel() {},
-    async getUsage() {
+      const turnId = 'session-1:1';
       return {
-        total: {
+        id: turnId,
+        status: 'completed',
+        events: runtimeEvents(turnId),
+        result: Promise.resolve({
+          output: 'done',
+          finishReason: 'completed',
+          usage: {
+            input: 10,
+            output: 2,
+            cacheRead: 4,
+            cacheCreation: 0,
+          },
+        }),
+        async steer() {},
+        async cancel() {},
+      };
+    },
+    async setMode() {},
+    registerTool() {},
+    replaceTool() {},
+    unregisterTool() {
+      return false;
+    },
+    async contextSnapshot() {
+      return {
+        revision: 1,
+        entries: [],
+        usage: {
           input: 10,
           output: 2,
           cacheRead: 4,
@@ -44,6 +66,12 @@ function createFixture() {
         },
       };
     },
+    async compact() {},
+    subscribe() {
+      return () => {};
+    },
+    async cancel() {},
+    async close() {},
   };
 
   const dependencies: RuntimeDependencies = {
@@ -214,11 +242,40 @@ describe('TaskOrchestrator', () => {
     });
 
     expect(fixture.runInputs).toEqual([
-      { prompt: 'First task' },
-      { prompt: 'Second task' },
+      { text: 'First task' },
+      { text: 'Second task' },
     ]);
     expect(fixture.createdProjects).toEqual(['Test project']);
     expect(fixture.resumedProjects).toEqual(['Test project']);
     expect(fixture.resumedSessions).toEqual(['session-1']);
   });
 });
+
+async function* runtimeEvents(turnId: string) {
+  const common = {
+    sessionId: 'session-1',
+    timestamp: '2026-01-01T00:00:00.000Z',
+  };
+  yield {
+    ...common,
+    type: 'turn.started' as const,
+    turnId,
+    mode: 'default' as const,
+    contextRevision: 1,
+    toolRevision: 0,
+    sequence: 1,
+  };
+  yield {
+    ...common,
+    type: 'message.delta' as const,
+    turnId,
+    text: 'done',
+  };
+  yield {
+    ...common,
+    type: 'turn.completed' as const,
+    turnId,
+    finishReason: 'completed',
+    sequence: 2,
+  };
+}

@@ -1,7 +1,5 @@
 import type {
-  AgentEvent,
   AgentTraceEvent,
-  AgentUsage,
   ConfigureModelInput,
   DirectChatTestInput,
   DirectChatTestResult,
@@ -13,6 +11,7 @@ import type {
   Task,
   TokenUsage,
 } from '@babybot/contracts';
+import type { AgentSession } from '@babybot/agent';
 
 export interface ProjectRepository {
   listProjects(): Promise<readonly Project[]>;
@@ -122,17 +121,6 @@ export interface CreateAgentSessionInput {
 
 export interface ResumeAgentSessionInput extends CreateAgentSessionInput {
   readonly sessionId: string;
-}
-
-export interface AgentRunInput {
-  readonly prompt: string;
-}
-
-export interface AgentSession {
-  readonly id: string;
-  run(input: AgentRunInput): AsyncIterable<AgentEvent>;
-  cancel(): Promise<void>;
-  getUsage(): Promise<AgentUsage | undefined>;
 }
 
 export interface AgentBackend {

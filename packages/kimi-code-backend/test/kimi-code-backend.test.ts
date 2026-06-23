@@ -48,72 +48,32 @@ describe('KimiCodeAgentBackend', () => {
         projectName: 'Test project',
         workDir: '/tmp/project-1',
       });
+      const turn = await session.prompt({ text: 'Do work' });
       const events = [];
-      for await (const event of session.run({ prompt: 'Do work' })) {
+      for await (const event of turn.events) {
         events.push(event);
       }
 
       expect(session.id).toBe('fake-session');
-      expect(events).toEqual([
-        { type: 'run.started', turnId: 4, origin: { kind: 'user' } },
-        { type: 'step.started', turnId: 4, step: 1, stepId: 'step-1' },
-        {
-          type: 'tool.started',
-          turnId: 4,
-          toolCallId: 'tool-1',
-          name: 'Read',
-          arguments: { path: 'README.md' },
-        },
-        {
-          type: 'tool.completed',
-          turnId: 4,
-          toolCallId: 'tool-1',
-          name: 'Read',
-          output: 'contents',
-          isError: false,
-        },
-        { type: 'message.delta', turnId: 4, text: 'fake output' },
-        {
-          type: 'step.completed',
-          turnId: 4,
-          step: 1,
-          stepId: 'step-1',
-          usage: {
-            input: 7,
-            output: 3,
-            cacheRead: 5,
-            cacheCreation: 1,
-          },
-          firstTokenLatencyMs: 120,
-          streamDurationMs: 450,
-        },
-        { type: 'run.completed', turnId: 4, reason: 'completed' },
+      expect(events.map(({ type }) => type)).toEqual([
+        'turn.started',
+        'step.started',
+        'tool.started',
+        'permission.decided',
+        'tool.completed',
+        'message.delta',
+        'step.completed',
+        'turn.completed',
       ]);
-      await expect(session.getUsage()).resolves.toEqual({
-        byModel: {
-          'fake-model': {
-            input: 7,
-            output: 3,
-            cacheRead: 5,
-            cacheCreation: 1,
-          },
-        },
-        currentTurn: {
-          input: 7,
-          output: 3,
-          cacheRead: 5,
-          cacheCreation: 1,
-        },
-        total: {
-          input: 7,
-          output: 3,
-          cacheRead: 5,
-          cacheCreation: 1,
-        },
-        model: 'fake-model',
+      await expect(turn.result).resolves.toEqual({
+        output: 'fake output',
+        finishReason: 'completed',
+        usage: { input: 7, output: 3, cacheRead: 5, cacheCreation: 1 },
+      });
+      await expect(session.contextSnapshot()).resolves.toMatchObject({
+        usage: { input: 7, output: 3, cacheRead: 5, cacheCreation: 1 },
         contextTokens: 1200,
-        maxContextTokens: 32000,
-        contextUsage: 0.0375,
+        contextWindow: 32000,
       });
     } finally {
       await backend.close();
@@ -135,7 +95,9 @@ describe('KimiCodeAgentBackend', () => {
         workDir: '/tmp/project-1',
         sessionId: 'fake-session',
       });
+      const turn = await session.prompt({ text: 'Wait' });
       await session.cancel();
+      await expect(turn.result).rejects.toMatchObject({ code: 'turn.cancelled' });
 
       expect(session.id).toBe('fake-session');
       expect(state.resumeCalls).toBe(1);

@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@babybot/agent": "workspace:*",
     "@babybot/contracts": "workspace:*"
   }
 }
-

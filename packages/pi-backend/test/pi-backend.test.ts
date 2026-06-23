@@ -57,10 +57,16 @@ describe('PiAgentBackend', () => {
       projectName: 'Test project',
       workDir: '/tmp/project-1',
     });
+    const turn = await runtime.prompt({ text: 'Build it' });
     const events = [];
-    for await (const event of runtime.run({ prompt: 'Build it' })) {
+    for await (const event of turn.events) {
       events.push(event);
     }
+    await expect(turn.result).resolves.toEqual({
+      output: 'done',
+      finishReason: 'stop',
+      usage: { input: 10, output: 2, cacheRead: 3, cacheCreation: 1 },
+    });
 
     expect(factory.createInputs).toHaveLength(1);
     expect(factory.createInputs[0]).toMatchObject({
@@ -83,52 +89,27 @@ describe('PiAgentBackend', () => {
     expect(factory.createInputs[0]?.systemPrompt).toContain(
       'Available tools:\n- read\n- write\n- test_native',
     );
-    expect(events).toEqual([
-      { type: 'run.started', turnId: 1 },
-      { type: 'step.started', turnId: 1, step: 1 },
-      { type: 'thinking.delta', turnId: 1, text: 'checking' },
-      {
-        type: 'tool.started',
-        turnId: 1,
-        toolCallId: 'tool-1',
-        name: 'read',
-        arguments: { path: 'README.md' },
-      },
-      {
-        type: 'tool.completed',
-        turnId: 1,
-        toolCallId: 'tool-1',
-        name: 'read',
-        output: {
-          content: [{ type: 'text', text: 'contents' }],
-          details: {},
-        },
-        isError: false,
-      },
-      { type: 'message.delta', turnId: 1, text: 'done' },
-      {
-        type: 'step.completed',
-        turnId: 1,
-        step: 1,
-        usage: { input: 10, output: 2, cacheRead: 3, cacheCreation: 1 },
-        finishReason: 'stop',
-      },
-      { type: 'run.completed', turnId: 1, reason: 'completed' },
+    expect(events.map(({ type }) => type)).toEqual([
+      'turn.started',
+      'step.started',
+      'thinking.delta',
+      'tool.started',
+      'permission.decided',
+      'tool.completed',
+      'message.delta',
+      'step.completed',
+      'turn.completed',
     ]);
-    await expect(runtime.getUsage()).resolves.toMatchObject({
-      byModel: {
-        'openrouter/vendor/coder': {
-          input: 10,
-          output: 2,
-          cacheRead: 3,
-          cacheCreation: 1,
-        },
-      },
-      total: { input: 10, output: 2, cacheRead: 3, cacheCreation: 1 },
-      model: 'openrouter/vendor/coder',
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'tool.started',
+      toolCallId: 'tool-1',
+      name: 'read',
+      arguments: { path: 'README.md' },
+    }));
+    await expect(runtime.contextSnapshot()).resolves.toMatchObject({
+      usage: { input: 10, output: 2, cacheRead: 3, cacheCreation: 1 },
       contextTokens: 16,
-      maxContextTokens: 128_000,
-      contextUsage: 0.000125,
+      contextWindow: 128_000,
     });
   });
 
@@ -163,7 +144,9 @@ describe('PiAgentBackend', () => {
       workDir: '/tmp/project-1',
       sessionId: 'pi-session-1',
     });
+    const turn = await runtime.prompt({ text: 'Wait' });
     await runtime.cancel();
+    await expect(turn.result).rejects.toMatchObject({ code: 'turn.cancelled' });
 
     expect(resumedFactory.resumeInputs[0]).toMatchObject({
       projectId: 'project-1',
@@ -195,9 +178,8 @@ describe('PiAgentBackend', () => {
     });
 
     expect(runtime.id).toBeTruthy();
-    await expect(runtime.getUsage()).resolves.toMatchObject({
-      model: 'openrouter/vendor/coder',
-      total: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+    await expect(runtime.contextSnapshot()).resolves.toMatchObject({
+      usage: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
     });
     await backend.close();
   });

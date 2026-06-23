@@ -102,18 +102,27 @@ importers:
 
   packages/core:
     dependencies:
+      '@babybot/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@babybot/contracts':
         specifier: workspace:*
         version: link:../contracts
 
   packages/kimi-code-backend:
     dependencies:
+      '@babybot/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@babybot/core':
         specifier: workspace:*
         version: link:../core
 
   packages/pi-backend:
     dependencies:
+      '@babybot/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@babybot/agent-harness':
         specifier: workspace:*
         version: link:../agent-harness

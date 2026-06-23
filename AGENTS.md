@@ -19,7 +19,9 @@ The repository is a pnpm workspace:
 
 - `apps/server` contains the Fastify local server and composition root.
 - `apps/web` contains the React/Vite browser interface.
-- `packages/core` contains use cases and the provider-neutral agent protocol.
+- `packages/core` contains project/task use cases and orchestration.
+- `packages/agent` owns the provider-neutral Session, Turn, Context, tool,
+  permission, prompt, observer, and Backend contracts.
 - `packages/agent-harness` owns provider-neutral agent profiles and system
   prompts.
 - `packages/storage` owns SQLite persistence and project directories.

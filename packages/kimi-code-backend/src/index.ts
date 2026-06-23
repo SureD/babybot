@@ -2,12 +2,23 @@ import { access } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import {
+  createAgentSession,
+  type AgentSession,
+  type JsonObject,
+  type ToolRegistration,
+} from '@babybot/agent';
+import type {
+  Backend,
+  BackendEvent,
+  BackendRunInput,
+  BackendSession,
+} from '@babybot/agent/backend';
+import type { ContextSnapshot, ContextStore } from '@babybot/agent/context';
 import type {
   AgentBackend,
   AgentBackendCapabilities,
   AgentEvent,
-  AgentRunInput,
-  AgentSession,
   AgentUsage,
   ConfigureModelInput,
   CreateAgentSessionInput,
@@ -178,7 +189,7 @@ export class KimiCodeAgentBackend implements AgentBackend {
 
   private harness?: KimiHarness;
   private sdkModule?: Promise<KimiSdkModule>;
-  private readonly sessions = new Map<string, KimiCodeAgentSession>();
+  private readonly sessions = new Map<string, AgentSession>();
 
   constructor(private readonly options: KimiCodeAgentBackendOptions) {}
 
@@ -365,7 +376,7 @@ export class KimiCodeAgentBackend implements AgentBackend {
       model,
       permission: this.options.permission,
     });
-    return this.wrapSession(session);
+    return this.wrapSession(session, input.workDir);
   }
 
   async resumeSession(input: ResumeAgentSessionInput): Promise<AgentSession> {
@@ -375,20 +386,35 @@ export class KimiCodeAgentBackend implements AgentBackend {
     }
 
     const harness = await this.getHarness();
-    return this.wrapSession(await harness.resumeSession({ id: input.sessionId }));
+    return this.wrapSession(
+      await harness.resumeSession({ id: input.sessionId }),
+      input.workDir,
+      input.sessionId,
+    );
   }
 
   async close(): Promise<void> {
+    await Promise.all([...this.sessions.values()].map((session) => session.close()));
     await this.harness?.close();
     this.harness = undefined;
     this.sessions.clear();
   }
 
-  private wrapSession(session: KimiSession): KimiCodeAgentSession {
-    const wrapped = new KimiCodeAgentSession(
+  private async wrapSession(
+    session: KimiSession,
+    workDir: string,
+    sessionId?: string,
+  ): Promise<AgentSession> {
+    const runtime = new KimiCodeAgentRuntime(
       session,
       this.options.turnTimeoutMs ?? 600_000,
     );
+    const wrapped = await createAgentSession({
+      backend: new KimiRuntimeBackend(runtime),
+      workDir,
+      ...(sessionId === undefined ? {} : { sessionId }),
+      tools: KIMI_TOOL_REGISTRATIONS,
+    });
     this.sessions.set(wrapped.id, wrapped);
     return wrapped;
   }
@@ -433,7 +459,7 @@ export class KimiCodeAgentBackend implements AgentBackend {
   }
 }
 
-class KimiCodeAgentSession implements AgentSession {
+class KimiCodeAgentRuntime {
   readonly id: string;
   private running = false;
 
@@ -449,7 +475,7 @@ class KimiCodeAgentSession implements AgentSession {
     }));
   }
 
-  async *run(input: AgentRunInput): AsyncIterable<AgentEvent> {
+  async *run(input: { readonly prompt: string }): AsyncIterable<AgentEvent> {
     if (this.running) {
       throw new Error(`Agent session "${this.id}" is already running.`);
     }
@@ -522,6 +548,195 @@ class KimiCodeAgentSession implements AgentSession {
       contextUsage: status.contextUsage,
     };
   }
+}
+
+const KIMI_TOOL_NAMES = [
+  'Read',
+  'Write',
+  'Edit',
+  'Shell',
+  'Bash',
+  'Glob',
+  'Grep',
+  'WebSearch',
+  'WebFetch',
+] as const;
+
+const KIMI_TOOL_REGISTRATIONS: readonly ToolRegistration[] = KIMI_TOOL_NAMES.map(
+  (name) => ({
+    name,
+    description: `Kimi Code ${name} tool.`,
+    inputSchema: { type: 'object', additionalProperties: true },
+    source: 'builtin',
+    version: '1',
+    lifetime: 'static',
+    readOnly: ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'].includes(name),
+    execution: 'backend',
+  }),
+);
+
+class KimiRuntimeBackend implements Backend {
+  constructor(private readonly runtime: KimiCodeAgentRuntime) {}
+
+  async open(): Promise<BackendSession> {
+    return new KimiBackendSession(this.runtime);
+  }
+}
+
+class KimiBackendSession implements BackendSession, ContextStore {
+  readonly id: string;
+
+  private revision = 0;
+
+  constructor(private readonly runtime: KimiCodeAgentRuntime) {
+    this.id = runtime.id;
+  }
+
+  async *run(input: BackendRunInput): AsyncIterable<BackendEvent> {
+    const controller = new AbortController();
+    const output: string[] = [];
+    for await (const event of this.runtime.run({
+      prompt: input.context.input.text,
+    })) {
+      switch (event.type) {
+        case 'run.started':
+        case 'agent.status':
+          break;
+        case 'step.started':
+          yield { type: event.type, step: event.step };
+          break;
+        case 'step.completed':
+          yield {
+            type: event.type,
+            step: event.step,
+            ...(event.usage === undefined ? {} : { usage: event.usage }),
+          };
+          break;
+        case 'step.retrying':
+          yield {
+            type: 'warning',
+            message:
+              `Kimi Code retry ${String(event.nextAttempt)}/${String(event.maxAttempts)}: ` +
+              event.error,
+          };
+          break;
+        case 'message.delta':
+          output.push(event.text);
+          yield { type: event.type, text: event.text };
+          break;
+        case 'thinking.delta':
+          yield { type: event.type, text: event.text };
+          break;
+        case 'tool.started': {
+          const call = {
+            id: event.toolCallId,
+            name: event.name,
+            arguments: kimiJsonObject(event.arguments),
+          };
+          yield { type: event.type, call };
+          const tool = input.tools.tools.find(({ name }) => name === call.name);
+          if (tool === undefined) {
+            yield {
+              type: 'failed',
+              error: `Kimi Code called unregistered tool ${call.name}.`,
+            };
+            return;
+          }
+          const decision = await input.hooks.authorize(
+            { mode: 'build', tool, call },
+            controller.signal,
+          );
+          if (decision.decision === 'deny') {
+            await this.runtime.cancel();
+            yield {
+              type: 'failed',
+              error: `Tool ${call.name} was denied: ${decision.reason}`,
+            };
+            return;
+          }
+          break;
+        }
+        case 'tool.progress':
+          yield {
+            type: event.type,
+            toolCallId: event.toolCallId,
+            text: event.text ?? event.kind,
+          };
+          break;
+        case 'tool.completed':
+          yield {
+            type: event.type,
+            toolCallId: event.toolCallId,
+            result: {
+              content: traceValueText(event.output),
+              isError: event.isError,
+              ...(event.output === undefined ? {} : { details: event.output }),
+            },
+          };
+          break;
+        case 'run.completed':
+          this.revision += 1;
+          yield {
+            type: 'completed',
+            output: output.join('').trim(),
+            finishReason: event.reason,
+          };
+          return;
+        case 'run.failed':
+          yield { type: 'failed', error: event.error };
+          return;
+        case 'warning':
+          yield { type: event.type, message: event.message };
+          break;
+        case 'subagent.started':
+        case 'subagent.completed':
+        case 'subagent.failed':
+        case 'compaction.started':
+        case 'compaction.completed':
+        case 'runtime.event':
+          yield { type: 'warning', message: `Kimi Code event: ${event.type}.` };
+          break;
+      }
+    }
+  }
+
+  async steer(): Promise<void> {
+    throw new Error('Kimi Code rollback sessions do not support steering.');
+  }
+
+  abort(): Promise<void> {
+    return this.runtime.cancel();
+  }
+
+  contextStore(): ContextStore {
+    return this;
+  }
+
+  async snapshot(): Promise<ContextSnapshot> {
+    const usage = await this.runtime.getUsage();
+    return {
+      revision: this.revision,
+      entries: [],
+      ...(usage?.total === undefined ? {} : { usage: usage.total }),
+      ...(usage?.model === undefined ? {} : { model: usage.model }),
+      ...(usage?.contextTokens === undefined
+        ? {}
+        : { contextTokens: usage.contextTokens }),
+      ...(usage?.maxContextTokens === undefined
+        ? {}
+        : { contextWindow: usage.maxContextTokens }),
+    };
+  }
+
+  async compact(): Promise<void> {
+    throw new Error('Kimi Code rollback sessions do not support compaction.');
+  }
+
+  async clear(): Promise<void> {
+    throw new Error('Kimi Code rollback sessions do not support clearing context.');
+  }
+
+  async close(): Promise<void> {}
 }
 
 export class UnavailableAgentBackend implements AgentBackend {
@@ -1102,6 +1317,22 @@ function toTraceValue(value: unknown, seen = new WeakSet<object>()): TraceValue 
   if (typeof value === 'symbol') return value.description ?? 'symbol';
   if (typeof value === 'function') return `[function ${value.name || 'anonymous'}]`;
   return null;
+}
+
+function kimiJsonObject(value: unknown): JsonObject {
+  const converted = toTraceValue(value);
+  return isTraceRecord(converted) ? converted : { value: converted };
+}
+
+function isTraceRecord(
+  value: TraceValue,
+): value is { readonly [key: string]: TraceValue } {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function traceValueText(value: TraceValue | undefined): string {
+  if (value === undefined) return '';
+  return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
 class AsyncEventQueue implements AsyncIterable<AgentEvent> {

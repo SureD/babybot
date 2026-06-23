@@ -105,10 +105,12 @@ export type TraceValue =
   | readonly TraceValue[]
   | { readonly [key: string]: TraceValue };
 
+export type AgentTurnId = string | number;
+
 type AgentEventPayload =
   | {
       readonly type: 'run.started';
-      readonly turnId: number;
+      readonly turnId: AgentTurnId;
       readonly origin?: TraceValue;
     }
   | {
@@ -121,13 +123,13 @@ type AgentEventPayload =
     }
   | {
       readonly type: 'step.started';
-      readonly turnId: number;
+      readonly turnId: AgentTurnId;
       readonly step: number;
       readonly stepId?: string;
     }
   | {
       readonly type: 'step.completed';
-      readonly turnId: number;
+      readonly turnId: AgentTurnId;
       readonly step: number;
       readonly stepId?: string;
       readonly usage?: TokenUsage;
@@ -137,7 +139,7 @@ type AgentEventPayload =
     }
   | {
       readonly type: 'step.retrying';
-      readonly turnId: number;
+      readonly turnId: AgentTurnId;
       readonly step: number;
       readonly stepId?: string;
       readonly attempt: number;
@@ -149,12 +151,12 @@ type AgentEventPayload =
     }
   | {
       readonly type: 'message.delta' | 'thinking.delta';
-      readonly turnId: number;
+      readonly turnId: AgentTurnId;
       readonly text: string;
     }
   | {
       readonly type: 'tool.started';
-      readonly turnId: number;
+      readonly turnId: AgentTurnId;
       readonly toolCallId: string;
       readonly name: string;
       readonly arguments?: TraceValue;
@@ -162,7 +164,7 @@ type AgentEventPayload =
     }
   | {
       readonly type: 'tool.progress';
-      readonly turnId: number;
+      readonly turnId: AgentTurnId;
       readonly toolCallId: string;
       readonly kind: string;
       readonly text?: string;
@@ -170,7 +172,7 @@ type AgentEventPayload =
     }
   | {
       readonly type: 'tool.completed';
-      readonly turnId: number;
+      readonly turnId: AgentTurnId;
       readonly toolCallId: string;
       readonly name: string;
       readonly output?: TraceValue;
@@ -192,10 +194,14 @@ type AgentEventPayload =
       readonly tokensAfter?: number;
     }
   | { readonly type: 'warning'; readonly code?: string; readonly message: string }
-  | { readonly type: 'run.completed'; readonly turnId: number; readonly reason: string }
+  | {
+      readonly type: 'run.completed';
+      readonly turnId: AgentTurnId;
+      readonly reason: string;
+    }
   | {
       readonly type: 'run.failed';
-      readonly turnId?: number;
+      readonly turnId?: AgentTurnId;
       readonly code?: string;
       readonly error: string;
     }

@@ -18,9 +18,10 @@ flowchart LR
     Web["Web App"] --> Server["Local Server"]
     Server --> Core["Project and Task Core"]
     Core --> Capability["Capability Runtime"]
-    Core --> Harness["Agent Harness"]
-    Harness --> Agent["Agent Backend"]
-    Agent --> Pi["Pi Agent Runtime"]
+    Core --> Agent["Agent Foundation"]
+    Agent --> Backend["Pi Backend"]
+    Backend --> Harness["Agent Harness"]
+    Backend --> Pi["Pi Agent Runtime"]
     Pi --> Provider["DeepSeek / OpenRouter"]
     Pi --> Tools["Tool Runtime"]
     Tools --> Builtins["read / write / edit / bash"]
@@ -54,7 +55,7 @@ backend. It persists every translated event before publishing it live.
 - one active in-process runtime per saved session;
 - streamed message, thinking, step, tool, retry, and compaction events;
 - cancellation and token/context usage; and
-- translation into Babybot's stable `AgentEvent` protocol.
+- translation into the provider-neutral Backend event protocol.
 
 The old kimi-code adapter remains only as an explicit rollback backend while
 the Pi migration is validated.
@@ -76,9 +77,9 @@ be conflated with the stable system prompt.
 
 `@babybot/agent` implements the provider-neutral foundation described by
 DESIGN-001. It groups Context, Turn, Tools, Observer, Prompter, Permission, and
-Session behind one package, with a narrow Backend port for Pi. The existing
-Core-to-Pi execution path remains active until the Pi adapter implements this
-new Backend port and the foundation is composed into the server.
+Session behind one package, with a narrow Backend port for Pi. All conversation
+turns now run through this foundation; Core no longer drives a provider session
+or consumes provider events directly.
 
 Only the Backend adapter may import Pi SDK types. Tool calls from both Pi
 builtins and Babybot-hosted tools must pass the same Permission hook before
@@ -130,6 +131,7 @@ sequenceDiagram
     participant UI as Web App
     participant API as Local Server
     participant Core as Task Orchestrator
+    participant Agent as Agent Foundation
     participant Adapter as Pi Backend
     participant Runtime as Pi Agent Runtime
     participant DB as SQLite
@@ -137,9 +139,13 @@ sequenceDiagram
     UI->>API: Create task
     API-->>UI: 202 Pending
     Core->>Adapter: Create or resume project session
+    Adapter->>Agent: create AgentSession
+    Core->>Agent: Session.prompt(input)
+    Agent->>Adapter: Backend.run(prepared context, tools)
     Adapter->>Runtime: prompt(input)
     Runtime-->>Adapter: Pi events
-    Adapter-->>Core: AgentEvent stream
+    Adapter-->>Agent: BackendEvent stream
+    Agent-->>Core: Turn events and result
     Core->>DB: Append ordered trace
     Core-->>API: Publish persisted update
     API-->>UI: Server-Sent Event
@@ -166,11 +172,14 @@ failures from runtime failures without returning credentials.
 
 ```mermaid
 flowchart LR
-    Backend["AgentBackend"] --> Session["AgentSession"]
-    Session --> Run["run(prompt)"]
-    Run --> Events["Async AgentEvent stream"]
+    Control["AgentBackend control plane"] --> Session["AgentSession"]
+    Session --> Prompt["prompt(input)"]
+    Prompt --> Turn["Turn"]
+    Turn --> Events["Async AgentEvent stream"]
+    Turn --> Result["TurnResult"]
+    Session --> Backend["BackendSession"]
     Session --> Cancel["cancel()"]
-    Session --> Usage["getUsage()"]
+    Session --> Context["contextSnapshot()"]
     ToolRuntime["AgentToolRuntime"] --> Tools["ResolvedAgentTool[]"]
     Tools --> Descriptors["builtin descriptors"]
     Tools --> Executable["native executable tools"]
@@ -195,8 +204,8 @@ cancellation, token accounting, and tool resolution.
 | Storage | `packages/storage` |
 | Shared HTTP contracts | `packages/contracts` |
 
-Core depends only on contracts. The server composes storage, capability,
-tool-runtime, and agent-backend implementations.
+Core depends on contracts and the provider-neutral agent package. The server
+composes storage, capability, tool-runtime, and agent-backend implementations.
 
 ## Deferred Work
 

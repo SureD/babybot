@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import {
   AuthStorage,
-  createAgentSession,
+  createAgentSession as createPiSession,
   DefaultResourceLoader,
   ModelRegistry,
   SessionManager,
@@ -12,18 +12,27 @@ import {
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 import {
+  createAgentSession,
+  type AgentSession,
+  type JsonObject,
+  type ToolRegistration,
+} from '@babybot/agent';
+import type {
+  Backend,
+  BackendEvent,
+  BackendRunInput,
+  BackendSession,
+} from '@babybot/agent/backend';
+import type { ContextSnapshot, ContextStore } from '@babybot/agent/context';
+import {
   generalAgentProfile,
   type AgentProfile,
 } from '@babybot/agent-harness';
 import type {
   AgentBackend,
   AgentBackendCapabilities,
-  AgentEvent,
-  AgentRunInput,
-  AgentSession,
   AgentExecutableTool,
   AgentToolRuntime,
-  AgentUsage,
   ConfigureModelInput,
   CreateAgentSessionInput,
   DirectChatTestInput,
@@ -33,7 +42,6 @@ import type {
   SetupModel,
   SetupStatus,
   TokenUsage,
-  TraceValue,
 } from '@babybot/core';
 
 interface PiModelReference {
@@ -48,10 +56,11 @@ export interface PiSessionLike {
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
   prompt(input: string): Promise<void>;
   steer(input: string): Promise<void>;
-  compact(): Promise<unknown>;
+  compact(instruction?: string): Promise<unknown>;
   abort(): Promise<void>;
   dispose(): void;
   getSessionStats(): SessionStats;
+  setActiveToolsByName?(toolNames: string[]): void;
 }
 
 export interface PiRuntimeInput {
@@ -104,7 +113,7 @@ export class PiAgentBackend implements AgentBackend {
   private readonly authStorage: AuthStorage;
   private readonly modelRegistry: ModelRegistry;
   private readonly runtimeFactory: PiRuntimeFactory;
-  private readonly runtimes = new Map<string, PiAgentRuntime>();
+  private readonly sessions = new Map<string, AgentSession>();
   private readonly configurationPath: string;
   private readonly modelsPath: string;
 
@@ -271,30 +280,34 @@ export class PiAgentBackend implements AgentBackend {
 
   async createSession(input: CreateAgentSessionInput): Promise<AgentSession> {
     const runtimeInput = await this.runtimeInput(input);
-    const runtime = new PiAgentRuntime(
-      await this.runtimeFactory.create(runtimeInput),
-    );
-    this.runtimes.set(runtime.id, runtime);
-    return runtime;
+    const session = await createAgentSession({
+      backend: new PiSessionBackend(this.runtimeFactory, runtimeInput),
+      workDir: input.workDir,
+      tools: runtimeInput.tools.map((name) =>
+        toolRegistration(name, runtimeInput.customTools)),
+    });
+    this.sessions.set(session.id, session);
+    return session;
   }
 
   async resumeSession(input: ResumeAgentSessionInput): Promise<AgentSession> {
-    const active = this.runtimes.get(input.sessionId);
+    const active = this.sessions.get(input.sessionId);
     if (active !== undefined) return active;
     const runtimeInput = await this.runtimeInput(input);
-    const runtime = new PiAgentRuntime(
-      await this.runtimeFactory.resume({
-        ...runtimeInput,
-        sessionId: input.sessionId,
-      }),
-    );
-    this.runtimes.set(runtime.id, runtime);
-    return runtime;
+    const session = await createAgentSession({
+      backend: new PiSessionBackend(this.runtimeFactory, runtimeInput),
+      workDir: input.workDir,
+      sessionId: input.sessionId,
+      tools: runtimeInput.tools.map((name) =>
+        toolRegistration(name, runtimeInput.customTools)),
+    });
+    this.sessions.set(session.id, session);
+    return session;
   }
 
   async close(): Promise<void> {
-    for (const runtime of this.runtimes.values()) runtime.close();
-    this.runtimes.clear();
+    await Promise.all([...this.sessions.values()].map((session) => session.close()));
+    this.sessions.clear();
   }
 
   private async runtimeInput(
@@ -351,112 +364,248 @@ export class PiAgentBackend implements AgentBackend {
   }
 }
 
-export class PiAgentRuntime implements AgentSession {
+class PiSessionBackend implements Backend {
+  constructor(
+    private readonly factory: PiRuntimeFactory,
+    private readonly input: PiRuntimeInput,
+  ) {}
+
+  async open(config: { readonly sessionId?: string }): Promise<BackendSession> {
+    const session = config.sessionId === undefined
+      ? await this.factory.create(this.input)
+      : await this.factory.resume({
+          ...this.input,
+          sessionId: config.sessionId,
+        });
+    return new PiBackendSession(session);
+  }
+}
+
+class PiBackendSession implements BackendSession, ContextStore {
   readonly id: string;
 
-  private turnId = 0;
   private running = false;
-  private readonly usageByModel = new Map<string, TokenUsage>();
-  private currentTurnUsage: TokenUsage | undefined;
+  private revision: number;
+  private runController: AbortController | undefined;
 
   constructor(private readonly session: PiSessionLike) {
     this.id = session.sessionId;
+    this.revision = session.getSessionStats().totalMessages ?? 0;
   }
 
-  async *run(input: AgentRunInput): AsyncIterable<AgentEvent> {
-    if (this.running) throw new Error('The Pi agent runtime is already running.');
+  async *run(input: BackendRunInput): AsyncIterable<BackendEvent> {
+    if (this.running) throw new Error('The Pi backend session is already running.');
     this.running = true;
-    this.turnId += 1;
-    const turnId = this.turnId;
+    const controller = new AbortController();
+    this.runController = controller;
+    const queue = new AsyncEventQueue<AgentSessionEvent>();
+    const unsubscribe = this.session.subscribe((event) => queue.push(event));
+    const output: string[] = [];
     let step = 0;
-    let failed = false;
-    const queue = new AsyncEventQueue<AgentEvent>();
-    const unsubscribe = this.session.subscribe((event) => {
-      const translated = translatePiEvent(event, {
-        turnId,
-        nextStep() {
-          step += 1;
-          return step;
-        },
-        currentStep() {
-          return Math.max(step, 1);
-        },
-        recordUsage: (model, usage) => {
-          this.currentTurnUsage = usage;
-          this.usageByModel.set(
-            model,
-            addUsage(this.usageByModel.get(model), usage),
-          );
-        },
-        hasFailed() {
-          return failed;
-        },
-        markFailed() {
-          failed = true;
-        },
-      });
-      for (const item of translated) queue.push(item);
-    });
+    let finishReason = 'completed';
+    let promptError: unknown;
+    let completed = false;
 
-    void this.session.prompt(input.prompt).then(
+    this.session.setActiveToolsByName?.(
+      input.tools.tools.filter(({ enabled }) => enabled).map(({ name }) => name),
+    );
+    void this.session.prompt(input.context.input.text).then(
       () => queue.close(),
       (error: unknown) => {
-        failed = true;
-        queue.push({
-          type: 'run.failed',
-          turnId,
-          code: 'pi.prompt.failed',
-          error: error instanceof Error ? error.message : String(error),
-        });
+        promptError = error;
         queue.close();
       },
     );
 
     try {
-      for await (const event of queue) yield event;
+      for await (const event of queue) {
+        controller.signal.throwIfAborted();
+        switch (event.type) {
+          case 'agent_start':
+            break;
+          case 'turn_start':
+            step += 1;
+            yield { type: 'step.started', step };
+            break;
+          case 'message_update': {
+            const update = event.assistantMessageEvent;
+            if (update.type === 'text_delta') {
+              output.push(update.delta);
+              yield { type: 'message.delta', text: update.delta };
+            } else if (update.type === 'thinking_delta') {
+              yield { type: 'thinking.delta', text: update.delta };
+            } else if (update.type === 'error') {
+              yield {
+                type: 'failed',
+                error:
+                  update.error.errorMessage ??
+                  `Pi stopped with reason: ${update.reason}`,
+              };
+              return;
+            }
+            break;
+          }
+          case 'tool_execution_start': {
+            const call = {
+              id: event.toolCallId,
+              name: event.toolName,
+              arguments: toJsonObject(event.args),
+            };
+            yield { type: 'tool.started', call };
+            const tool = input.tools.tools.find(({ name }) => name === call.name);
+            if (tool === undefined) {
+              yield {
+                type: 'failed',
+                error: `Pi called tool ${call.name}, which is not in the Turn tool snapshot.`,
+              };
+              return;
+            }
+            const decision = await input.hooks.authorize(
+              { mode: 'build', tool, call },
+              controller.signal,
+            );
+            if (decision.decision === 'deny') {
+              await this.session.abort();
+              yield {
+                type: 'failed',
+                error: `Tool ${call.name} was denied: ${decision.reason}`,
+              };
+              return;
+            }
+            break;
+          }
+          case 'tool_execution_update':
+            yield {
+              type: 'tool.progress',
+              toolCallId: event.toolCallId,
+              text: traceText(event.partialResult),
+            };
+            break;
+          case 'tool_execution_end':
+            yield {
+              type: 'tool.completed',
+              toolCallId: event.toolCallId,
+              result: {
+                content: traceText(event.result),
+                isError: event.isError,
+                details: event.result,
+              },
+            };
+            break;
+          case 'turn_end': {
+            const message = event.message;
+            if (message.role === 'assistant') {
+              finishReason = message.stopReason;
+              yield {
+                type: 'step.completed',
+                step: Math.max(step, 1),
+                usage: tokenUsage(message.usage),
+              };
+            } else {
+              yield { type: 'step.completed', step: Math.max(step, 1) };
+            }
+            break;
+          }
+          case 'agent_end':
+            completed = true;
+            this.revision = this.session.getSessionStats().totalMessages ?? this.revision;
+            yield {
+              type: 'completed',
+              output: output.join('').trim(),
+              finishReason,
+            };
+            return;
+          case 'compaction_start':
+            yield {
+              type: 'warning',
+              message: `Pi context compaction started (${event.reason}).`,
+            };
+            break;
+          case 'compaction_end':
+            yield {
+              type: 'warning',
+              message: event.errorMessage === undefined
+                ? `Pi context compaction completed (${event.reason}).`
+                : `Pi context compaction failed: ${event.errorMessage}`,
+            };
+            break;
+          case 'auto_retry_start':
+            yield {
+              type: 'warning',
+              message:
+                `Pi retry ${String(event.attempt + 1)}/${String(event.maxAttempts)} ` +
+                `after ${String(event.delayMs)}ms: ${event.errorMessage}`,
+            };
+            break;
+          case 'auto_retry_end':
+            if (!event.success) {
+              yield {
+                type: 'warning',
+                message: event.finalError ?? 'Pi retry attempts were exhausted.',
+              };
+            }
+            break;
+        }
+      }
+
+      if (promptError !== undefined) {
+        yield { type: 'failed', error: errorMessage(promptError) };
+      } else if (!completed) {
+        yield {
+          type: 'failed',
+          error: 'Pi ended without an agent completion event.',
+        };
+      }
     } finally {
       unsubscribe();
       this.running = false;
+      if (this.runController === controller) this.runController = undefined;
     }
   }
 
-  cancel(): Promise<void> {
-    return this.session.abort();
+  steer(input: { readonly text: string }): Promise<void> {
+    return this.session.steer(input.text);
   }
 
-  async getUsage(): Promise<AgentUsage | undefined> {
+  async abort(): Promise<void> {
+    this.runController?.abort(new Error('Pi Turn was aborted.'));
+    await this.session.abort();
+  }
+
+  contextStore(): ContextStore {
+    return this;
+  }
+
+  async snapshot(): Promise<ContextSnapshot> {
     const stats = this.session.getSessionStats();
-    const total = tokenUsage(stats.tokens);
-    const model = this.session.model;
     const context = stats.contextUsage;
+    this.revision = Math.max(this.revision, stats.totalMessages ?? 0);
     return {
-      byModel: Object.fromEntries(this.usageByModel),
-      ...(this.currentTurnUsage === undefined
+      revision: this.revision,
+      entries: [],
+      usage: tokenUsage(stats.tokens),
+      ...(this.session.model === undefined
         ? {}
-        : { currentTurn: this.currentTurnUsage }),
-      total,
-      ...(model === undefined ? {} : { model: `${model.provider}/${model.id}` }),
+        : { model: `${this.session.model.provider}/${this.session.model.id}` }),
       ...(context?.tokens === null || context?.tokens === undefined
         ? {}
         : { contextTokens: context.tokens }),
       ...(context?.contextWindow === undefined
         ? {}
-        : { maxContextTokens: context.contextWindow }),
-      ...(context?.percent === null || context?.percent === undefined
-        ? {}
-        : { contextUsage: context.percent / 100 }),
+        : { contextWindow: context.contextWindow }),
     };
   }
 
-  steer(input: string): Promise<void> {
-    return this.session.steer(input);
+  async compact(instruction?: string): Promise<void> {
+    await this.session.compact(instruction);
+    this.revision += 1;
   }
 
-  compact(): Promise<unknown> {
-    return this.session.compact();
+  async clear(): Promise<void> {
+    throw new Error('Pi does not support clearing a persistent session in place.');
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.session.dispose();
   }
 }
@@ -506,7 +655,7 @@ class SdkPiRuntimeFactory implements PiRuntimeFactory {
         `Pi model "${input.provider}/${input.model}" is not configured.`,
       );
     }
-    const result = await createAgentSession({
+    const result = await createPiSession({
       cwd: input.workDir,
       agentDir: this.agentDir,
       authStorage: this.authStorage,
@@ -567,131 +716,25 @@ function adaptTool(
   };
 }
 
-interface TranslationState {
-  readonly turnId: number;
-  nextStep(): number;
-  currentStep(): number;
-  recordUsage(model: string, usage: TokenUsage): void;
-  hasFailed(): boolean;
-  markFailed(): void;
-}
-
-function translatePiEvent(
-  event: AgentSessionEvent,
-  state: TranslationState,
-): readonly AgentEvent[] {
-  switch (event.type) {
-    case 'agent_start':
-      return [{ type: 'run.started', turnId: state.turnId }];
-    case 'turn_start':
-      return [{
-        type: 'step.started',
-        turnId: state.turnId,
-        step: state.nextStep(),
-      }];
-    case 'message_update': {
-      const update = event.assistantMessageEvent;
-      if (update.type === 'text_delta') {
-        return [{ type: 'message.delta', turnId: state.turnId, text: update.delta }];
-      }
-      if (update.type === 'thinking_delta') {
-        return [{ type: 'thinking.delta', turnId: state.turnId, text: update.delta }];
-      }
-      if (update.type === 'error') {
-        state.markFailed();
-        return [{
-          type: 'run.failed',
-          turnId: state.turnId,
-          code: 'pi.model.failed',
-          error: update.error.errorMessage ?? `Pi stopped with reason: ${update.reason}`,
-        }];
-      }
-      return [];
-    }
-    case 'tool_execution_start':
-      return [{
-        type: 'tool.started',
-        turnId: state.turnId,
-        toolCallId: event.toolCallId,
-        name: event.toolName,
-        arguments: toTraceValue(event.args),
-      }];
-    case 'tool_execution_update':
-      return [{
-        type: 'tool.progress',
-        turnId: state.turnId,
-        toolCallId: event.toolCallId,
-        kind: 'output',
-        text: traceText(event.partialResult),
-      }];
-    case 'tool_execution_end':
-      return [{
-        type: 'tool.completed',
-        turnId: state.turnId,
-        toolCallId: event.toolCallId,
-        name: event.toolName,
-        output: toTraceValue(event.result),
-        isError: event.isError,
-      }];
-    case 'turn_end': {
-      const message = event.message;
-      if (message.role !== 'assistant') {
-        return [{
-          type: 'step.completed',
-          turnId: state.turnId,
-          step: state.currentStep(),
-        }];
-      }
-      const usage = tokenUsage(message.usage);
-      state.recordUsage(`${message.provider}/${message.model}`, usage);
-      return [{
-        type: 'step.completed',
-        turnId: state.turnId,
-        step: state.currentStep(),
-        usage,
-        finishReason: message.stopReason,
-      }];
-    }
-    case 'agent_end':
-      return state.hasFailed()
-        ? []
-        : [{ type: 'run.completed', turnId: state.turnId, reason: 'completed' }];
-    case 'compaction_start':
-      return [{ type: 'compaction.started', trigger: event.reason }];
-    case 'compaction_end':
-      return [{
-        type: 'compaction.completed',
-        trigger: event.reason,
-        ...(event.errorMessage === undefined
-          ? {}
-          : { compactedCount: 0 }),
-      }];
-    case 'auto_retry_start':
-      return [{
-        type: 'step.retrying',
-        turnId: state.turnId,
-        step: state.currentStep(),
-        attempt: event.attempt,
-        nextAttempt: event.attempt + 1,
-        maxAttempts: event.maxAttempts,
-        delayMs: event.delayMs,
-        error: event.errorMessage,
-      }];
-    case 'auto_retry_end':
-      return event.success
-        ? []
-        : [{
-            type: 'warning',
-            code: 'pi.retry.exhausted',
-            message: event.finalError ?? 'Pi retry attempts were exhausted.',
-          }];
-    default:
-      return [{
-        type: 'runtime.event',
-        name: event.type,
-        data: toTraceValue(event),
-      }];
-  }
+function toolRegistration(
+  name: string,
+  customTools: readonly AgentExecutableTool[],
+): ToolRegistration {
+  const custom = customTools.find((tool) => tool.name === name);
+  return {
+    name,
+    description: custom?.description ?? `Pi built-in ${name} tool.`,
+    inputSchema: custom?.inputSchema ?? {
+      type: 'object',
+      additionalProperties: true,
+    },
+    source: custom?.source ?? 'builtin',
+    version: '1',
+    lifetime: 'static',
+    readOnly:
+      name === 'read' || name === 'web_fetch' || name === 'web_search',
+    execution: 'backend',
+  };
 }
 
 class AsyncEventQueue<T> implements AsyncIterable<T> {
@@ -738,16 +781,15 @@ function tokenUsage(usage: {
   };
 }
 
-function addUsage(current: TokenUsage | undefined, next: TokenUsage): TokenUsage {
-  return {
-    input: (current?.input ?? 0) + next.input,
-    output: (current?.output ?? 0) + next.output,
-    cacheRead: (current?.cacheRead ?? 0) + next.cacheRead,
-    cacheCreation: (current?.cacheCreation ?? 0) + next.cacheCreation,
-  };
-}
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly JsonValue[]
+  | { readonly [key: string]: JsonValue };
 
-function toTraceValue(value: unknown): TraceValue {
+function toJsonValue(value: unknown): JsonValue {
   if (
     value === null ||
     typeof value === 'string' ||
@@ -756,10 +798,10 @@ function toTraceValue(value: unknown): TraceValue {
   ) {
     return value;
   }
-  if (Array.isArray(value)) return value.map(toTraceValue);
+  if (Array.isArray(value)) return value.map(toJsonValue);
   if (typeof value === 'object') {
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, toTraceValue(item)]),
+      Object.entries(value).map(([key, item]) => [key, toJsonValue(item)]),
     );
   }
   if (typeof value === 'bigint') return value.toString();
@@ -768,9 +810,22 @@ function toTraceValue(value: unknown): TraceValue {
   return null;
 }
 
+function toJsonObject(value: unknown): JsonObject {
+  const converted = toJsonValue(value);
+  return isJsonRecord(converted) ? converted : { value: converted };
+}
+
+function isJsonRecord(value: JsonValue): value is { readonly [key: string]: JsonValue } {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function traceText(value: unknown): string {
   if (typeof value === 'string') return value;
-  return JSON.stringify(toTraceValue(value));
+  return JSON.stringify(toJsonValue(value));
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function modelsFile(

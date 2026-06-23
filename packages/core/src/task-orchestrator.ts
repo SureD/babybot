@@ -1,14 +1,22 @@
 import { randomUUID } from 'node:crypto';
 
 import type {
+  AgentEvent as RuntimeAgentEvent,
+  AgentSession,
+  ContextSnapshot,
+  TokenUsage,
+  Turn,
+} from '@babybot/agent';
+import type {
+  AgentEvent,
   AgentTraceEvent,
   AgentUsage,
   ExecutionRoute,
   Task,
+  TraceValue,
 } from '@babybot/contracts';
 
 import type {
-  AgentSession,
   RuntimeDependencies,
   SubmitTaskRequest,
   TraceRepository,
@@ -124,15 +132,27 @@ export class TaskOrchestrator {
         session.id,
       );
       this.activeSessions.set(task.id, session);
-      const output = await consumeAgentRun(
-        session,
-        task.input,
+      const turn = await session.prompt({ text: task.input });
+      const eventConsumption = consumeAgentTurn(
+        turn,
+        session.id,
         task.id,
         task.projectId,
         this.dependencies.traces,
         this.dependencies.events,
       );
-      return this.completeAgentTask(task, output, await session.getUsage());
+      let result;
+      try {
+        result = await turn.result;
+      } finally {
+        await eventConsumption;
+      }
+      const context = await session.contextSnapshot();
+      return this.completeAgentTask(
+        task,
+        result.output,
+        agentUsage(result.usage, context),
+      );
     } catch (error) {
       return this.update(task, {
         status: 'failed',
@@ -183,38 +203,169 @@ export class TaskOrchestrator {
   }
 }
 
-async function consumeAgentRun(
-  session: AgentSession,
-  prompt: string,
+async function consumeAgentTurn(
+  turn: Turn,
+  sessionId: string,
   taskId: string,
   projectId: string,
   traces: TraceRepository,
   events: RuntimeDependencies['events'],
-): Promise<string> {
-  const output: string[] = [];
-  let failure: string | undefined;
+): Promise<void> {
   let sequence = 0;
 
-  for await (const event of session.run({ prompt })) {
+  for await (const event of turn.events) {
     sequence += 1;
     const trace = {
       taskId,
-      sessionId: session.id,
+      sessionId,
       sequence,
-      timestamp: new Date().toISOString(),
-      event,
+      timestamp: event.timestamp,
+      event: toTraceEvent(event),
     };
     await traces.appendTrace(trace);
     events.traceAppended(projectId, trace);
-    if (event.type === 'message.delta') {
-      output.push(event.text);
-    } else if (event.type === 'run.failed') {
-      failure = event.error;
-    }
   }
+}
 
-  if (failure !== undefined) {
-    throw new Error(failure);
+function agentUsage(
+  currentTurn: TokenUsage | undefined,
+  context: ContextSnapshot,
+): AgentUsage | undefined {
+  if (
+    currentTurn === undefined &&
+    context.usage === undefined &&
+    context.contextTokens === undefined &&
+    context.contextWindow === undefined &&
+    context.model === undefined
+  ) {
+    return undefined;
   }
-  return output.join('').trim();
+  return {
+    ...(currentTurn === undefined ? {} : { currentTurn }),
+    ...(context.usage === undefined ? {} : { total: context.usage }),
+    ...(context.model === undefined ? {} : { model: context.model }),
+    ...(context.contextTokens === undefined
+      ? {}
+      : { contextTokens: context.contextTokens }),
+    ...(context.contextWindow === undefined
+      ? {}
+      : { maxContextTokens: context.contextWindow }),
+    ...(context.contextTokens === undefined || context.contextWindow === undefined
+      ? {}
+      : { contextUsage: context.contextTokens / context.contextWindow }),
+  };
+}
+
+function toTraceEvent(event: RuntimeAgentEvent): AgentEvent {
+  switch (event.type) {
+    case 'turn.started':
+      return { type: 'run.started', turnId: event.turnId };
+    case 'turn.completed':
+      return {
+        type: 'run.completed',
+        turnId: event.turnId,
+        reason: event.finishReason,
+      };
+    case 'turn.failed':
+      return { type: 'run.failed', turnId: event.turnId, error: event.error };
+    case 'turn.cancelled':
+      return {
+        type: 'run.failed',
+        turnId: event.turnId,
+        code: 'turn.cancelled',
+        error: event.reason ?? 'Turn was cancelled.',
+      };
+    case 'step.started':
+      return {
+        type: event.type,
+        turnId: event.turnId,
+        step: event.step,
+      };
+    case 'step.completed':
+      return {
+        type: event.type,
+        turnId: event.turnId,
+        step: event.step,
+        ...(event.usage === undefined ? {} : { usage: event.usage }),
+      };
+    case 'message.delta':
+    case 'thinking.delta':
+      return { type: event.type, turnId: event.turnId, text: event.text };
+    case 'tool.started':
+      return {
+        type: event.type,
+        turnId: event.turnId,
+        toolCallId: event.toolCallId,
+        name: event.name,
+        arguments: toTraceValue(event.arguments),
+      };
+    case 'tool.progress':
+      return {
+        type: event.type,
+        turnId: event.turnId,
+        toolCallId: event.toolCallId,
+        kind: 'output',
+        text: event.text,
+      };
+    case 'tool.completed':
+      return {
+        type: event.type,
+        turnId: event.turnId,
+        toolCallId: event.toolCallId,
+        name: event.name,
+        output: event.output,
+        isError: event.isError,
+      };
+    case 'permission.decided':
+      return {
+        type: 'runtime.event',
+        name: event.type,
+        data: {
+          turnId: event.turnId,
+          toolCallId: event.toolCallId,
+          decision: event.decision,
+          policy: event.policy,
+          reason: event.reason,
+          asked: event.asked,
+        },
+      };
+    case 'context.compacted':
+      return {
+        type: 'compaction.completed',
+        trigger: 'manual',
+        compactedCount: event.revision,
+      };
+    case 'warning':
+      return {
+        type: event.type,
+        message: event.message,
+      };
+    default:
+      return assertNever(event);
+  }
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unexpected agent event: ${JSON.stringify(value)}`);
+}
+
+function toTraceValue(value: unknown): TraceValue {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean'
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(toTraceValue);
+  if (typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, toTraceValue(item)]),
+    );
+  }
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value === 'symbol') return value.description ?? 'symbol';
+  if (typeof value === 'function') return value.name || 'function';
+  return null;
 }
