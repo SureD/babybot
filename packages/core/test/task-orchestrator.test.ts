@@ -163,6 +163,9 @@ function createFixture() {
       async discoverModels() {
         return [];
       },
+      async saveApiKey() {
+        throw new Error('Unexpected API key save.');
+      },
       async configure() {
         throw new Error('Unexpected setup.');
       },

@@ -1,27 +1,55 @@
 import type {
   AgentTraceEvent,
+  AppSettings,
+  ChooseDirectoryInput,
   ConfigureModelInput,
   CreateProjectInput,
   CreateTaskInput,
+  DirectoryListing,
+  DirectorySelection,
   DiscoverModelsInput,
   DirectChatTestInput,
   DirectChatTestResult,
   HealthResponse,
   ProjectStreamEvent,
   Project,
+  SaveApiKeyInput,
   SetupModel,
   SetupModelCatalog,
   SetupStatus,
   Task,
+  UpdateAppSettingsInput,
 } from '@babybot/contracts';
 
 export const api = {
   health: (): Promise<HealthResponse> => request('/api/health'),
+  settings: (): Promise<AppSettings> => request('/api/settings'),
+  directories: (path?: string): Promise<DirectoryListing> =>
+    request(
+      path === undefined
+        ? '/api/settings/directories'
+        : `/api/settings/directories?path=${encodeURIComponent(path)}`,
+    ),
+  updateSettings: (input: UpdateAppSettingsInput): Promise<AppSettings> =>
+    request('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  chooseDirectory: (input: ChooseDirectoryInput): Promise<DirectorySelection> =>
+    request('/api/settings/choose-directory', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   setupStatus: (): Promise<SetupStatus> => request('/api/setup'),
   modelCatalog: (provider: DiscoverModelsInput['provider']): Promise<SetupModelCatalog> =>
     request(`/api/setup/models?provider=${encodeURIComponent(provider)}`),
   discoverModels: (input: DiscoverModelsInput): Promise<readonly SetupModel[]> =>
     request('/api/setup/models', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  saveApiKey: (input: SaveApiKeyInput): Promise<SetupStatus> =>
+    request('/api/setup/api-key', {
       method: 'POST',
       body: JSON.stringify(input),
     }),

@@ -17,6 +17,8 @@ describe('generalAgentProfile', () => {
     expect(prompt).toContain('If the task combines research and implementation');
     expect(prompt).toContain('Project name: "CoreWeave research"');
     expect(prompt).toContain('Workspace: "/projects/project-1/workspace"');
+    expect(prompt).toContain('complete project filesystem');
+    expect(prompt).toContain('Do not inspect parent directories');
     expect(prompt).toContain('- web_search');
     expect(prompt).not.toContain('expert coding assistant operating inside pi');
   });

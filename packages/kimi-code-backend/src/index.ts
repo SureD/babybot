@@ -27,6 +27,7 @@ import type {
   DiscoverModelsInput,
   ModelProvider,
   ResumeAgentSessionInput,
+  SaveApiKeyInput,
   SetupModel,
   SetupStatus,
   TraceValue,
@@ -244,6 +245,28 @@ export class KimiCodeAgentBackend implements AgentBackend {
     return models;
   }
 
+  async saveApiKey(input: SaveApiKeyInput): Promise<SetupStatus> {
+    if (!(await this.isAvailable())) {
+      return unavailableSetupStatus();
+    }
+    const providerId = babybotProviderId(input.provider);
+    const config = await (await this.getHarness()).setConfig({
+      providers: {
+        [providerId]: providerConfig(input.provider, input.apiKey),
+      },
+    });
+    const status = setupStatusFromConfig(config, this.options.model);
+    const configured = status.configured && status.provider === input.provider;
+    return {
+      backendAvailable: status.backendAvailable,
+      configured,
+      provider: input.provider,
+      ...(configured && status.model !== undefined ? { model: status.model } : {}),
+      hasApiKey: true,
+      modelLockedByEnvironment: status.modelLockedByEnvironment,
+    };
+  }
+
   async configure(input: ConfigureModelInput): Promise<SetupStatus> {
     if (this.options.model !== undefined) {
       throw new Error(
@@ -266,18 +289,11 @@ export class KimiCodeAgentBackend implements AgentBackend {
       throw new Error(`Model "${input.model}" was not returned by ${input.provider}.`);
     }
 
-    const providerId = `babybot-${input.provider}`;
+    const providerId = babybotProviderId(input.provider);
     const modelAlias = `${providerId}/${model.id}`;
     await harness.setConfig({
       providers: {
-        [providerId]: {
-          type: 'openai',
-          baseUrl:
-            input.provider === 'deepseek'
-              ? 'https://api.deepseek.com'
-              : 'https://openrouter.ai/api/v1',
-          apiKey,
-        },
+        [providerId]: providerConfig(input.provider, apiKey),
       },
       models: {
         [modelAlias]: {
@@ -761,6 +777,10 @@ export class UnavailableAgentBackend implements AgentBackend {
     throw new Error('No agent backend is configured.');
   }
 
+  async saveApiKey(_input: SaveApiKeyInput): Promise<SetupStatus> {
+    throw new Error('No agent backend is configured.');
+  }
+
   async configure(_input: ConfigureModelInput): Promise<SetupStatus> {
     throw new Error('No agent backend is configured.');
   }
@@ -786,6 +806,21 @@ function unavailableSetupStatus(): SetupStatus {
     configured: false,
     hasApiKey: false,
     modelLockedByEnvironment: false,
+  };
+}
+
+function babybotProviderId(provider: ModelProvider): string {
+  return `babybot-${provider}`;
+}
+
+function providerConfig(provider: ModelProvider, apiKey: string): KimiProviderConfig {
+  return {
+    type: 'openai',
+    baseUrl:
+      provider === 'deepseek'
+        ? 'https://api.deepseek.com'
+        : 'https://openrouter.ai/api/v1',
+    apiKey,
   };
 }
 

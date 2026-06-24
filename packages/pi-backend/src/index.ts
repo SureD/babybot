@@ -39,6 +39,7 @@ import type {
   DirectChatTestResult,
   DiscoverModelsInput,
   ResumeAgentSessionInput,
+  SaveApiKeyInput,
   SetupModel,
   SetupStatus,
   TokenUsage,
@@ -180,6 +181,25 @@ export class PiAgentBackend implements AgentBackend {
       apiKey,
     );
     return parseDeepSeekModels(payload);
+  }
+
+  async saveApiKey(input: SaveApiKeyInput): Promise<SetupStatus> {
+    this.authStorage.set(input.provider, { type: 'api_key', key: input.apiKey });
+    const configuration = await this.readConfiguration();
+    const configured =
+      configuration !== undefined &&
+      configuration.provider === input.provider &&
+      this.authStorage.hasAuth(input.provider);
+    return {
+      backendAvailable: true,
+      configured,
+      provider: input.provider,
+      ...(configured && configuration.model !== undefined
+        ? { model: this.options.model ?? configuration.model }
+        : {}),
+      hasApiKey: true,
+      modelLockedByEnvironment: this.options.model !== undefined,
+    };
   }
 
   async configure(input: ConfigureModelInput): Promise<SetupStatus> {

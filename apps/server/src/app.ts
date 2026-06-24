@@ -7,12 +7,15 @@ import Fastify, { type FastifyInstance } from 'fastify';
 
 import { LocalCapabilityRuntime } from '@babybot/capability-runtime';
 import {
+  chooseDirectoryInputSchema,
   createProjectInputSchema,
   createTaskInputSchema,
   configureModelInputSchema,
   directChatTestInputSchema,
   discoverModelsInputSchema,
   modelProviderSchema,
+  saveApiKeyInputSchema,
+  updateAppSettingsInputSchema,
   type ApiError,
   type HealthResponse,
 } from '@babybot/contracts';
@@ -33,6 +36,12 @@ import {
 } from '@babybot/tool-runtime';
 
 import type { ServerConfig } from './config';
+import {
+  chooseSettingsDirectory,
+  getAppSettings,
+  listSettingsDirectories,
+  saveAppSettings,
+} from './app-settings';
 import { ProjectEventHub } from './project-events';
 
 export interface CreateAppOptions {
@@ -46,7 +55,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
   const app = Fastify({ logger: options.logger ?? true });
   const storage = new SqliteStorage(join(options.config.dataDir, 'babybot.sqlite'));
-  const workspaces = new FileProjectWorkspace(join(options.config.dataDir, 'projects'));
+  const workspaces = new FileProjectWorkspace(options.config.projectsDir);
   const toolRuntime = new ProjectToolRuntime(
     options.config.web?.tavilyApiKey === undefined
       ? {}
@@ -93,6 +102,70 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   }));
 
   app.get('/api/setup', () => agentBackend.getSetupStatus());
+
+  app.get('/api/settings', () => getAppSettings(options.config));
+
+  app.get('/api/settings/directories', async (request, reply) => {
+    const query = request.query as { readonly path?: unknown };
+    if (query.path !== undefined && typeof query.path !== 'string') {
+      return reply.code(400).send({ error: 'path must be a string.' });
+    }
+    try {
+      return await listSettingsDirectories(options.config, query.path);
+    } catch (error) {
+      return reply.code(400).send({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  app.post('/api/settings/choose-directory', async (request, reply) => {
+    const parsed = chooseDirectoryInputSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: parsed.error.issues[0]?.message ?? 'Invalid directory input.',
+      });
+    }
+    try {
+      return await chooseSettingsDirectory(options.config, parsed.data);
+    } catch (error) {
+      return reply.code(400).send({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  app.post('/api/settings', async (request, reply) => {
+    const parsed = updateAppSettingsInputSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: parsed.error.issues[0]?.message ?? 'Invalid settings input.',
+      });
+    }
+    try {
+      return await saveAppSettings(options.config, parsed.data);
+    } catch (error) {
+      return reply.code(400).send({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  app.post('/api/setup/api-key', async (request, reply) => {
+    const parsed = saveApiKeyInputSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: parsed.error.issues[0]?.message ?? 'Invalid API key input.',
+      });
+    }
+    try {
+      return await agentBackend.saveApiKey(parsed.data);
+    } catch (error) {
+      return reply.code(400).send({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
 
   app.get('/api/setup/models', async (request, reply) => {
     const query = request.query as { readonly provider?: unknown };

@@ -1,12 +1,13 @@
 import { existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const dataDirectory = resolve(
-  repositoryRoot,
-  process.env['BABYBOT_DATA_DIR'] ?? '.babybot',
+const dataDirectory = configuredPath(
+  process.env['BABYBOT_DATA_DIR'],
+  '.babybot',
+  '.babybot',
 );
 const databasePath = resolve(dataDirectory, 'babybot.sqlite');
 const arguments_ = process.argv.slice(2);
@@ -141,6 +142,24 @@ function truncate(value, limit) {
 
 function writeJson(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function configuredPath(value, fallback, legacyDefault) {
+  const trimmed = value?.trim();
+  if (
+    trimmed === undefined ||
+    trimmed === '' ||
+    (legacyDefault !== undefined && trimmed === legacyDefault)
+  ) {
+    return resolve(fallback);
+  }
+  return resolve(repositoryRoot, expandHome(trimmed));
+}
+
+function expandHome(path) {
+  if (path === '~') return process.env.HOME ?? path;
+  if (path.startsWith('~/')) return join(process.env.HOME ?? '', path.slice(2));
+  return path;
 }
 
 function fail(message) {

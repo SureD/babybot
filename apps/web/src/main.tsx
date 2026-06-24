@@ -10,6 +10,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import type {
   AgentTraceEvent,
   AgentUsage,
+  AppSettings,
   DirectChatTestResult,
   ExecutionPreference,
   HealthResponse,
@@ -31,6 +32,7 @@ interface ProjectConversation {
 
 function App() {
   const [health, setHealth] = useState<HealthResponse>();
+  const [settings, setSettings] = useState<AppSettings>();
   const [setupStatus, setSetupStatus] = useState<SetupStatus>();
   const [projects, setProjects] = useState<readonly Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
@@ -43,15 +45,22 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [showSetup, setShowSetup] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const traceCursors = useRef<Record<string, number>>({});
   const activeProjectId = useRef<string | undefined>(undefined);
   const conversationRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
 
   useEffect(() => {
-    void Promise.all([api.health(), api.setupStatus(), api.listProjects()])
-      .then(([nextHealth, nextSetupStatus, nextProjects]) => {
+    void Promise.all([
+      api.health(),
+      api.settings(),
+      api.setupStatus(),
+      api.listProjects(),
+    ])
+      .then(([nextHealth, nextSettings, nextSetupStatus, nextProjects]) => {
         setHealth(nextHealth);
+        setSettings(nextSettings);
         setSetupStatus(nextSetupStatus);
         setProjects(nextProjects);
         if (nextSetupStatus.configured) {
@@ -235,7 +244,7 @@ function App() {
     return () => cancelAnimationFrame(frame);
   }, [latestTraceSequence, selectedProjectId, tasks.length]);
 
-  if (setupStatus === undefined) {
+  if (setupStatus === undefined || settings === undefined) {
     return (
       <main className="setup-shell">
         <p>{error ?? 'Loading Babybot...'}</p>
@@ -247,9 +256,12 @@ function App() {
     return (
       <Setup
         status={setupStatus}
+        settings={settings}
         {...(setupStatus.configured
           ? { onCancel: () => setShowSetup(false) }
           : {})}
+        onSettingsChanged={setSettings}
+        onSetupStatusChanged={setSetupStatus}
         onConfigured={(nextStatus) => {
           setSetupStatus(nextStatus);
           setShowSetup(false);
@@ -297,9 +309,20 @@ function App() {
           <button className="model-settings" onClick={() => setShowSetup(true)}>
             Model settings
           </button>
+          <button className="model-settings" onClick={() => setShowSettings(true)}>
+            Workspace settings
+          </button>
         </footer>
       </aside>
 
+      {showSettings ? (
+        <SettingsPage
+          settings={settings}
+          onClose={() => setShowSettings(false)}
+          onOpenModelSettings={() => setShowSetup(true)}
+          onSettingsChanged={setSettings}
+        />
+      ) : (
       <section className="workspace">
         <nav className="project-tabs" aria-label="Project tabs" role="tablist">
           {projects.map((project) => (
@@ -437,6 +460,7 @@ function App() {
           </>
         )}
       </section>
+      )}
     </main>
   );
 }
@@ -474,12 +498,194 @@ function compareTaskRevision(left: Task, right: Task): number {
   return statusOrder[left.status] - statusOrder[right.status];
 }
 
+function SettingsPage({
+  settings,
+  onSettingsChanged,
+  onOpenModelSettings,
+  onClose,
+}: {
+  readonly settings: AppSettings;
+  readonly onSettingsChanged: (settings: AppSettings) => void;
+  readonly onOpenModelSettings: () => void;
+  readonly onClose: () => void;
+}) {
+  return (
+    <section className="workspace settings-workspace">
+      <header className="settings-header">
+        <div>
+          <p className="eyebrow">Settings</p>
+          <h2>Workspace</h2>
+        </div>
+        <button className="secondary-action" onClick={onClose}>
+          Back to projects
+        </button>
+      </header>
+      <div className="settings-content">
+        <WorkspaceSettings
+          settings={settings}
+          onSettingsChanged={onSettingsChanged}
+        />
+        <section className="settings-panel">
+          <div>
+            <p className="eyebrow">Model</p>
+            <h3>Agent backend</h3>
+            <p className="settings-copy">
+              Provider credentials and the default model are stored locally.
+            </p>
+          </div>
+          <button className="secondary-action" onClick={onOpenModelSettings}>
+            Model settings
+          </button>
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function WorkspaceSettings({
+  settings,
+  onSettingsChanged,
+}: {
+  readonly settings: AppSettings;
+  readonly onSettingsChanged: (settings: AppSettings) => void;
+}) {
+  const active = settings.pending ?? settings.current;
+  const [projectsDir, setProjectsDir] = useState(active.projectsDir);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [saved, setSaved] = useState(false);
+  const environmentManaged = settings.environmentOverrides.projectsDir;
+  const overrideLabels = [
+    settings.environmentOverrides.dataDir ? 'BABYBOT_DATA_DIR' : undefined,
+    settings.environmentOverrides.projectsDir ? 'BABYBOT_PROJECTS_DIR' : undefined,
+    settings.environmentOverrides.piAgentDir ? 'BABYBOT_PI_HOME' : undefined,
+  ].filter((label): label is string => label !== undefined);
+
+  useEffect(() => {
+    setProjectsDir((settings.pending ?? settings.current).projectsDir);
+    setSaved(false);
+    setError(undefined);
+  }, [settings]);
+
+  async function chooseWorkspace() {
+    if (environmentManaged || busy) return;
+    setBusy(true);
+    setError(undefined);
+    setSaved(false);
+    try {
+      const selection = await api.chooseDirectory({ defaultPath: projectsDir });
+      if (selection.canceled) return;
+      if (selection.path === undefined) {
+        throw new Error('No folder was selected.');
+      }
+      setProjectsDir(selection.path);
+      const nextSettings = await api.updateSettings({
+        projectsDir: selection.path,
+      });
+      onSettingsChanged(nextSettings);
+      setSaved(true);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="settings-panel">
+      <div>
+        <p className="eyebrow">Workspace root</p>
+        <h3>Project folder</h3>
+        <p className="settings-copy">
+          Babybot creates project workspaces under this folder. Model credentials
+          stay in the existing local configuration.
+        </p>
+      </div>
+
+      <div className="settings-form">
+        <label htmlFor="project-folder">Folder path</label>
+        <div className="path-form">
+          <output
+            id="project-folder"
+            className="path-display"
+          >
+            {projectsDir}
+          </output>
+          <button
+            type="button"
+            disabled={busy || environmentManaged}
+            onClick={() => void chooseWorkspace()}
+          >
+            {busy ? 'Choosing...' : 'Choose folder'}
+          </button>
+        </div>
+      </div>
+
+      {environmentManaged ? (
+        <p className="settings-warning">
+          BABYBOT_PROJECTS_DIR is set in the environment, so this path cannot be
+          changed from the UI.
+        </p>
+      ) : null}
+      {overrideLabels.length === 0 || environmentManaged ? null : (
+        <p className="settings-warning">
+          Environment variables still control {overrideLabels.join(', ')}.
+          Those paths stay on their environment values.
+        </p>
+      )}
+      {settings.restartRequired ? (
+        <p className="settings-warning">
+          Restart Babybot to use the pending project folder. Existing data is not
+          moved.
+        </p>
+      ) : null}
+      {saved && !settings.restartRequired ? (
+        <p className="settings-success">Workspace settings are up to date.</p>
+      ) : null}
+      {error === undefined ? null : <p className="error">{error}</p>}
+
+      <dl className="settings-paths">
+        <div>
+          <dt>Current projects</dt>
+          <dd>{settings.current.projectsDir}</dd>
+        </div>
+        <div>
+          <dt>Current state</dt>
+          <dd>{settings.current.dataDir}</dd>
+        </div>
+        {settings.pending === undefined ? null : (
+          <>
+            <div>
+              <dt>Pending projects</dt>
+              <dd>{settings.pending.projectsDir}</dd>
+            </div>
+            <div>
+              <dt>Pending state</dt>
+              <dd>{settings.pending.dataDir}</dd>
+            </div>
+          </>
+        )}
+        <div>
+          <dt>Settings file</dt>
+          <dd>{settings.settingsPath}</dd>
+        </div>
+      </dl>
+    </section>
+  );
+}
+
 function Setup({
   status,
+  settings,
+  onSettingsChanged,
+  onSetupStatusChanged,
   onConfigured,
   onCancel,
 }: {
   readonly status: SetupStatus;
+  readonly settings: AppSettings;
+  readonly onSettingsChanged: (settings: AppSettings) => void;
+  readonly onSetupStatusChanged: (status: SetupStatus) => void;
   readonly onConfigured: (status: SetupStatus) => void;
   readonly onCancel?: () => void;
 }) {
@@ -494,6 +700,7 @@ function Setup({
   const [catalogUpdatedAt, setCatalogUpdatedAt] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [keySaved, setKeySaved] = useState(false);
   const [chatTest, setChatTest] = useState<DirectChatTestResult>();
 
   useEffect(() => {
@@ -502,6 +709,7 @@ function Setup({
     setModel('');
     setCatalogUpdatedAt(undefined);
     setError(undefined);
+    setKeySaved(false);
     setChatTest(undefined);
     void (async () => {
       try {
@@ -534,18 +742,20 @@ function Setup({
     return () => {
       active = false;
     };
-  }, [provider, status.model, status.provider]);
+  }, [provider, status.hasApiKey, status.model, status.provider]);
 
   async function loadModels(event: FormEvent) {
     event.preventDefault();
     const canUseSavedKey = status.hasApiKey && status.provider === provider;
-    if (apiKey.trim() === '' && !canUseSavedKey) return;
+    const trimmedApiKey = apiKey.trim();
+    if (trimmedApiKey === '' && !canUseSavedKey) return;
     setBusy(true);
     setError(undefined);
+    setKeySaved(false);
     try {
       const nextModels = await api.discoverModels({
         provider,
-        ...(apiKey.trim() === '' ? {} : { apiKey }),
+        ...(trimmedApiKey === '' ? {} : { apiKey: trimmedApiKey }),
       });
       setModels(nextModels);
       setCatalogUpdatedAt(new Date().toISOString());
@@ -554,6 +764,47 @@ function Setup({
           ? current
           : nextModels[0]?.id ?? '',
       );
+      if (trimmedApiKey !== '') {
+        const nextStatus = await api.saveApiKey({
+          provider,
+          apiKey: trimmedApiKey,
+        });
+        setApiKey('');
+        setKeySaved(true);
+        onSetupStatusChanged(nextStatus);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveApiKey() {
+    const trimmedApiKey = apiKey.trim();
+    if (trimmedApiKey === '') return;
+    setBusy(true);
+    setError(undefined);
+    setKeySaved(false);
+    try {
+      const nextModels = await api.discoverModels({
+        provider,
+        apiKey: trimmedApiKey,
+      });
+      setModels(nextModels);
+      setCatalogUpdatedAt(new Date().toISOString());
+      setModel((current) =>
+        nextModels.some((candidate) => candidate.id === current)
+          ? current
+          : nextModels[0]?.id ?? '',
+      );
+      const nextStatus = await api.saveApiKey({
+        provider,
+        apiKey: trimmedApiKey,
+      });
+      setApiKey('');
+      setKeySaved(true);
+      onSetupStatusChanged(nextStatus);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -563,15 +814,18 @@ function Setup({
 
   async function saveSetup() {
     if (model === '') return;
+    const trimmedApiKey = apiKey.trim();
     setBusy(true);
     setError(undefined);
+    setKeySaved(false);
     try {
       const nextStatus = await api.configureModel({
         provider,
-        ...(apiKey.trim() === '' ? {} : { apiKey }),
+        ...(trimmedApiKey === '' ? {} : { apiKey: trimmedApiKey }),
         model,
       });
       setApiKey('');
+      setKeySaved(true);
       onConfigured(nextStatus);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -609,6 +863,7 @@ function Setup({
       candidate.id.toLocaleLowerCase().includes(query)
     );
   });
+  const canUseSavedKey = status.hasApiKey && status.provider === provider;
 
   return (
     <main className="setup-shell">
@@ -627,6 +882,11 @@ function Setup({
           </p>
         ) : null}
 
+        <WorkspaceSettings
+          settings={settings}
+          onSettingsChanged={onSettingsChanged}
+        />
+
         {!status.backendAvailable ? (
           <p className="error">
             kimi-code is not available. Configure KIMI_CODE_SDK_PATH and restart
@@ -640,6 +900,7 @@ function Setup({
               value={provider}
               onChange={(event) => {
                 setProvider(event.target.value as ModelProvider);
+                setKeySaved(false);
                 setFreeOnly(false);
                 setModelQuery('');
               }}
@@ -649,25 +910,38 @@ function Setup({
             </select>
 
             <label htmlFor="setup-key">
-              API key {status.hasApiKey && status.provider === provider ? '(saved)' : ''}
+              API key {canUseSavedKey ? '(saved)' : ''}
             </label>
             <input
               id="setup-key"
               type="password"
               autoComplete="off"
               value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
+              onChange={(event) => {
+                setApiKey(event.target.value);
+                setKeySaved(false);
+              }}
               placeholder={provider === 'deepseek' ? 'sk-...' : 'sk-or-v1-...'}
             />
             <button
               disabled={
                 busy ||
-                (apiKey.trim() === '' &&
-                  !(status.hasApiKey && status.provider === provider))
+                (apiKey.trim() === '' && !canUseSavedKey)
               }
             >
               {busy ? 'Checking...' : models.length === 0 ? 'Load models' : 'Refresh models'}
             </button>
+            <button
+              type="button"
+              className="secondary-setup-action"
+              disabled={busy || apiKey.trim() === ''}
+              onClick={() => void saveApiKey()}
+            >
+              {busy ? 'Saving...' : 'Save API key'}
+            </button>
+            {keySaved || (canUseSavedKey && apiKey.trim() === '') ? (
+              <p className="settings-success">API key saved locally.</p>
+            ) : null}
           </form>
         )}
 
@@ -741,7 +1015,7 @@ function Setup({
               disabled={busy || model === ''}
               onClick={() => void saveSetup()}
             >
-              {busy ? 'Saving...' : 'Save and continue'}
+              {busy ? 'Saving...' : 'Save API key and model'}
             </button>
             {provider === 'openrouter' ? (
               <button

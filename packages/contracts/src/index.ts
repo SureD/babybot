@@ -44,6 +44,12 @@ export const discoverModelsInputSchema = z.object({
 });
 export type DiscoverModelsInput = z.infer<typeof discoverModelsInputSchema>;
 
+export const saveApiKeyInputSchema = z.object({
+  provider: modelProviderSchema,
+  apiKey: z.string().trim().min(1),
+});
+export type SaveApiKeyInput = z.infer<typeof saveApiKeyInputSchema>;
+
 export const configureModelInputSchema = z.object({
   provider: modelProviderSchema,
   apiKey: z.string().trim().min(1).optional(),
@@ -259,6 +265,55 @@ export const createTaskInputSchema = z.object({
   preference: executionPreferenceSchema.default('auto'),
 });
 export type CreateTaskInput = z.infer<typeof createTaskInputSchema>;
+
+export const updateAppSettingsInputSchema = z.object({
+  projectsDir: z.string().trim().min(1).max(2_000),
+});
+export type UpdateAppSettingsInput = z.infer<typeof updateAppSettingsInputSchema>;
+
+export const chooseDirectoryInputSchema = z.object({
+  defaultPath: z.string().trim().min(1).max(2_000).optional(),
+});
+export type ChooseDirectoryInput = z.infer<typeof chooseDirectoryInputSchema>;
+
+export interface AppSettingsPaths {
+  readonly projectsDir: string;
+  readonly dataDir: string;
+  readonly piAgentDir?: string;
+}
+
+export interface AppSettings {
+  readonly current: AppSettingsPaths;
+  readonly pending?: AppSettingsPaths;
+  readonly settingsPath: string;
+  readonly restartRequired: boolean;
+  readonly environmentOverrides: {
+    readonly dataDir: boolean;
+    readonly projectsDir: boolean;
+    readonly piAgentDir: boolean;
+  };
+}
+
+export interface DirectoryEntry {
+  readonly name: string;
+  readonly path: string;
+}
+
+export interface DirectoryShortcut extends DirectoryEntry {
+  readonly kind: 'home' | 'documents' | 'desktop' | 'downloads' | 'current' | 'pending';
+}
+
+export interface DirectoryListing {
+  readonly path: string;
+  readonly parent?: string;
+  readonly entries: readonly DirectoryEntry[];
+  readonly shortcuts: readonly DirectoryShortcut[];
+}
+
+export interface DirectorySelection {
+  readonly canceled: boolean;
+  readonly path?: string;
+}
 
 export interface HealthResponse {
   readonly status: 'ok';

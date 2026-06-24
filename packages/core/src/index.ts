@@ -11,6 +11,7 @@ export type {
   DirectChatTestResult,
   DiscoverModelsInput,
   ModelProvider,
+  SaveApiKeyInput,
   SetupModel,
   SetupStatus,
   TokenUsage,

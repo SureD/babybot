@@ -6,6 +6,7 @@ import type {
   DiscoverModelsInput,
   ExecutionPreference,
   Project,
+  SaveApiKeyInput,
   SetupModel,
   SetupStatus,
   Task,
@@ -129,6 +130,7 @@ export interface AgentBackend {
   isAvailable(): Promise<boolean>;
   getSetupStatus(): Promise<SetupStatus>;
   discoverModels(input: DiscoverModelsInput): Promise<readonly SetupModel[]>;
+  saveApiKey(input: SaveApiKeyInput): Promise<SetupStatus>;
   configure(input: ConfigureModelInput): Promise<SetupStatus>;
   testChat(input: DirectChatTestInput): Promise<DirectChatTestResult>;
   createSession(input: CreateAgentSessionInput): Promise<AgentSession>;

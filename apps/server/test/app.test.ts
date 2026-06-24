@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -25,15 +25,8 @@ describe('Babybot HTTP API', () => {
   it('creates a project and records a failed task when no backend is configured', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'babybot-server-'));
     temporaryDirectories.push(directory);
-    const config: ServerConfig = {
-      host: '127.0.0.1',
-      port: 8787,
-      dataDir: directory,
-      webDistDir: join(directory, 'missing-web-dist'),
-      kimi: {
-        permission: 'auto',
-      },
-    };
+    const projectsDir = join(directory, 'user-projects');
+    const config = testConfig(directory, projectsDir);
     const app = await createApp({
       config,
       agentBackend: new UnavailableAgentBackend(),
@@ -48,6 +41,11 @@ describe('Babybot HTTP API', () => {
       });
       expect(projectResponse.statusCode).toBe(201);
       const project = projectResponse.json<{ id: string; name: string }>();
+      const workspace = await stat(join(projectsDir, project.id, 'workspace'));
+      expect(workspace.isDirectory()).toBe(true);
+      await expect(
+        stat(join(directory, 'projects', project.id, 'workspace')),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
 
       const taskResponse = await app.inject({
         method: 'POST',
@@ -74,18 +72,89 @@ describe('Babybot HTTP API', () => {
     }
   });
 
+  it('saves workspace settings for the next server start', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'babybot-server-'));
+    temporaryDirectories.push(directory);
+    const config = testConfig(directory);
+    const app = await createApp({
+      config,
+      agentBackend: new UnavailableAgentBackend(),
+      logger: false,
+    });
+
+    try {
+      const settingsResponse = await app.inject({
+        method: 'GET',
+        url: '/api/settings',
+      });
+      expect(settingsResponse.statusCode).toBe(200);
+      expect(settingsResponse.json()).toMatchObject({
+        current: {
+          dataDir: directory,
+          projectsDir: join(directory, 'projects-root'),
+          piAgentDir: join(directory, 'pi'),
+        },
+        restartRequired: false,
+      });
+
+      const nextProjectsDir = join(directory, 'next-projects');
+      const saveResponse = await app.inject({
+        method: 'POST',
+        url: '/api/settings',
+        payload: { projectsDir: nextProjectsDir },
+      });
+      expect(saveResponse.statusCode).toBe(200);
+      expect(saveResponse.json()).toMatchObject({
+        current: {
+          projectsDir: join(directory, 'projects-root'),
+        },
+        pending: {
+          dataDir: directory,
+          projectsDir: nextProjectsDir,
+          piAgentDir: join(directory, 'pi'),
+        },
+        restartRequired: true,
+      });
+      await expect(stat(nextProjectsDir)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('lists local folders for the workspace picker', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'babybot-server-'));
+    temporaryDirectories.push(directory);
+    const config = testConfig(directory);
+    await mkdir(join(directory, 'selectable', 'child'), { recursive: true });
+    await writeFile(join(directory, 'selectable', 'file.txt'), 'not a folder');
+    const app = await createApp({
+      config,
+      agentBackend: new UnavailableAgentBackend(),
+      logger: false,
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/settings/directories?path=${encodeURIComponent(join(directory, 'selectable'))}`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        path: join(directory, 'selectable'),
+        parent: directory,
+        entries: [{ name: 'child', path: join(directory, 'selectable', 'child') }],
+      });
+      expect(response.body).not.toContain('file.txt');
+    } finally {
+      await app.close();
+    }
+  });
+
   it('exposes incremental agent trace and detailed token usage', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'babybot-server-'));
     temporaryDirectories.push(directory);
-    const config: ServerConfig = {
-      host: '127.0.0.1',
-      port: 8787,
-      dataDir: directory,
-      webDistDir: join(directory, 'missing-web-dist'),
-      kimi: {
-        permission: 'auto',
-      },
-    };
+    const config = testConfig(directory);
     const app = await createApp({
       config,
       agentBackend: createTracingBackend(),
@@ -158,13 +227,7 @@ describe('Babybot HTTP API', () => {
     const directory = await mkdtemp(join(tmpdir(), 'babybot-server-'));
     temporaryDirectories.push(directory);
     const app = await createApp({
-      config: {
-        host: '127.0.0.1',
-        port: 8787,
-        dataDir: directory,
-        webDistDir: join(directory, 'missing-web-dist'),
-        kimi: { permission: 'auto' },
-      },
+      config: testConfig(directory),
       agentBackend: createTracingBackend(),
       logger: false,
     });
@@ -227,13 +290,7 @@ describe('Babybot HTTP API', () => {
     temporaryDirectories.push(directory);
     const backend = createSetupBackend();
     const app = await createApp({
-      config: {
-        host: '127.0.0.1',
-        port: 8787,
-        dataDir: directory,
-        webDistDir: join(directory, 'missing-web-dist'),
-        kimi: { permission: 'auto' },
-      },
+      config: testConfig(directory),
       agentBackend: backend,
       logger: false,
     });
@@ -287,6 +344,24 @@ describe('Babybot HTTP API', () => {
         modelLockedByEnvironment: false,
       });
 
+      const keyResponse = await app.inject({
+        method: 'POST',
+        url: '/api/setup/api-key',
+        payload: {
+          provider: 'openrouter',
+          apiKey: 'secret-key',
+        },
+      });
+      expect(keyResponse.statusCode).toBe(200);
+      expect(keyResponse.body).not.toContain('secret-key');
+      expect(keyResponse.json()).toEqual({
+        backendAvailable: true,
+        configured: false,
+        provider: 'openrouter',
+        hasApiKey: true,
+        modelLockedByEnvironment: false,
+      });
+
       const chatTestResponse = await app.inject({
         method: 'POST',
         url: '/api/setup/test-chat',
@@ -324,6 +399,27 @@ describe('Babybot HTTP API', () => {
   });
 });
 
+function testConfig(
+  dataDir: string,
+  projectsDir = join(dataDir, 'projects-root'),
+): ServerConfig {
+  return {
+    host: '127.0.0.1',
+    port: 8787,
+    dataDir,
+    projectsDir,
+    settingsPath: join(dataDir, 'settings.json'),
+    pathOverrides: {
+      dataDir: false,
+      projectsDir: false,
+      piAgentDir: false,
+    },
+    webDistDir: join(dataDir, 'missing-web-dist'),
+    pi: { agentDir: join(dataDir, 'pi') },
+    kimi: { permission: 'auto' },
+  };
+}
+
 function createSetupBackend(): AgentBackend {
   return {
     ...createTracingBackend(),
@@ -336,6 +432,16 @@ function createSetupBackend(): AgentBackend {
         supportsThinking: false,
         isFree: false,
       }];
+    },
+    async saveApiKey(input) {
+      expect(input.apiKey).toBe('secret-key');
+      return {
+        backendAvailable: true,
+        configured: false,
+        provider: input.provider,
+        hasApiKey: true,
+        modelLockedByEnvironment: false,
+      };
     },
     async configure(input) {
       expect(input.apiKey).toBe('secret-key');
@@ -438,6 +544,9 @@ function createTracingBackend(): AgentBackend {
     },
     async discoverModels() {
       return [];
+    },
+    async saveApiKey() {
+      throw new Error('Unexpected API key save.');
     },
     async configure() {
       throw new Error('Unexpected setup.');
