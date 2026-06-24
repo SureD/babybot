@@ -370,14 +370,6 @@ button:disabled {
   font-size: 11px;
 }
 
-.backend-status {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  overflow-wrap: anywhere;
-  line-height: 1.45;
-}
-
 .model-settings {
   padding: 7px 9px;
   color: #dce2dd;
@@ -822,11 +814,6 @@ textarea:focus {
   gap: 12px;
   padding-top: 10px;
   border-top: 1px solid #e6e0d6;
-}
-
-.task-actions select {
-  padding: 7px 9px;
-  font-size: 11px;
 }
 
 .task-actions button {

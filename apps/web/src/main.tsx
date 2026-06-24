@@ -12,7 +12,6 @@ import type {
   AgentUsage,
   AppSettings,
   DirectChatTestResult,
-  ExecutionPreference,
   HealthResponse,
   ModelProvider,
   Project,
@@ -41,7 +40,6 @@ function App() {
   >({});
   const [projectName, setProjectName] = useState('');
   const [taskInputs, setTaskInputs] = useState<Readonly<Record<string, string>>>({});
-  const [preference, setPreference] = useState<ExecutionPreference>('auto');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [showSetup, setShowSetup] = useState(false);
@@ -183,7 +181,7 @@ function App() {
     try {
       const task = await api.createTask(selectedProjectId, {
         input: taskInput,
-        preference,
+        preference: 'auto',
       });
       setConversations((current) => {
         const conversation = current[selectedProjectId] ?? { tasks: [], traces: {} };
@@ -244,7 +242,7 @@ function App() {
     return () => cancelAnimationFrame(frame);
   }, [latestTraceSequence, selectedProjectId, tasks.length]);
 
-  if (setupStatus === undefined || settings === undefined) {
+  if (health === undefined || setupStatus === undefined || settings === undefined) {
     return (
       <main className="setup-shell">
         <p>{error ?? 'Loading Babybot...'}</p>
@@ -298,14 +296,6 @@ function App() {
         </div>
 
         <footer>
-          <div className="backend-status">
-            <span className={health?.agentBackend.available === true ? 'dot ready' : 'dot'} />
-            {health === undefined
-              ? 'Connecting'
-              : `${setupStatus.provider ?? health.agentBackend.name}: ${
-                  setupStatus.model ?? 'not configured'
-                }`}
-          </div>
           <button className="model-settings" onClick={() => setShowSetup(true)}>
             Model settings
           </button>
@@ -390,7 +380,6 @@ function App() {
                       <p className="message-author">Babybot</p>
                       <div className="task-meta">
                         <span className={`status ${task.status}`}>{task.status}</span>
-                        <span>{task.route ?? task.preference}</span>
                         {task.status === 'running' ? (
                           <button
                             className="cancel-task"
@@ -440,17 +429,6 @@ function App() {
                 rows={3}
               />
               <div className="task-actions">
-                <select
-                  aria-label="Execution preference"
-                  value={preference}
-                  onChange={(event) =>
-                    setPreference(event.target.value as ExecutionPreference)
-                  }
-                >
-                  <option value="auto">Auto route</option>
-                  <option value="capability">Use capability</option>
-                  <option value="coding">Use coding agent</option>
-                </select>
                 <span className="composer-hint">Enter to send · Shift Enter for a new line</span>
                 <button disabled={busy || taskInput.trim() === ''}>
                   {busy ? 'Sending...' : 'Send'}
@@ -528,7 +506,7 @@ function SettingsPage({
         <section className="settings-panel">
           <div>
             <p className="eyebrow">Model</p>
-            <h3>Agent backend</h3>
+            <h3>Model connection</h3>
             <p className="settings-copy">
               Provider credentials and the default model are stored locally.
             </p>
@@ -873,8 +851,8 @@ function Setup({
         </p>
         <h1>{status.configured ? 'Choose a model' : 'Connect a model'}</h1>
         <p className="setup-copy">
-          Babybot uses kimi-code for model calls. Choose a provider, verify its
-          API key, and select the default coding model.
+          Choose a model provider, verify its API key, and select the default
+          model.
         </p>
         {status.configured ? (
           <p className="current-model">
@@ -889,8 +867,8 @@ function Setup({
 
         {!status.backendAvailable ? (
           <p className="error">
-            kimi-code is not available. Configure KIMI_CODE_SDK_PATH and restart
-            Babybot.
+            Model connection is not available. Check local configuration and
+            restart Babybot.
           </p>
         ) : (
           <form onSubmit={(event) => void loadModels(event)}>
@@ -1057,7 +1035,7 @@ function Setup({
 
         {error === undefined ? null : <p className="error">{error}</p>}
         <p className="setup-note">
-          The key is written to the local kimi-code configuration and is never
+          The key is written to the local model configuration and is never
           returned by the Babybot API.
         </p>
         {onCancel === undefined ? null : (
